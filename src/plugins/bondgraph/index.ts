@@ -84,6 +84,7 @@ import {
     definitionToLibraryTemplate,
     svgImageData
 } from './definitions'
+import { elementTemplatesQuery, styleOverrides, templateStyle } from './laws'
 import type {
     BGComponentLibrary,
     BGLibraryComponentTemplate,
@@ -181,7 +182,8 @@ type ElementTemplate = ElementTypeName & {
     parameters: IdVariableMap
     variables: IdVariableMap
     symbol: string
-    defaultStyle: BGElementStyle
+    defaultStyle: BGElementStyle            // the base component's, with the template's bgf:hasStyle in place
+    lawLabel?: string                       // the template's bgf:lawLabel: names its constitutive relation
     baseComponent: BGBaseComponent
 }
 
@@ -1048,7 +1050,8 @@ export class BondgraphPlugin implements PluginInterface {
         let imageData = ''
         try {
             imageData = svgImageData(symbol, species, location,
-                                     baseComponent.style, pluginData.fillString)
+                                     pluginData.elementTemplate?.defaultStyle ?? baseComponent.style,
+                                     pluginData.fillString, pluginData.elementTemplate?.lawLabel)
         // biome-ignore lint/suspicious/noExplicitAny: <>
         } catch (error: any) {
             return (error as Error).message
@@ -1347,21 +1350,7 @@ export class BondgraphPlugin implements PluginInterface {
                 this.#baseComponentToElementTemplates.get(component.type)!.push(elementTemplate)
                 continue
             }
-            this.#query(`
-                SELECT ?element ?label ?symbol ?domain ?relation WHERE {
-                    ?element
-                        rdfs:subClassOf* ?subType ;
-                        rdfs:subClassOf* <${base}> .
-                    ?subType bgf:hasDomain ?domain .
-                    OPTIONAL { ?element rdfs:label ?label }
-                    OPTIONAL { ?element bgf:hasSymbol ?symbol }
-                    OPTIONAL { ?subType bgf:constitutiveRelation ?relation }
-                    FILTER (
-                        exists { ?element a bgf:ElementTemplate }
-                     || exists {<${base}> a bgf:CompositeElement}
-                    )
-                  } order by ?label`
-            ).forEach((r: Map<string, $rdf.Term>) => {
+            this.#query(elementTemplatesQuery(base)).forEach((r: Map<string, $rdf.Term>) => {
                 const element = r.get('element')!
                 const domainId = r.get('domain')!.value
                 const label = r.get('label')
@@ -1375,7 +1364,8 @@ export class BondgraphPlugin implements PluginInterface {
                     name: label ? label.value : $rdf.namespaceMap.getCurie(element.value),
                     parameters: new Map(),
                     variables: new Map(),
-                    defaultStyle: component.style,
+                    defaultStyle: templateStyle(component.style, styleOverrides(r)),
+                    lawLabel: r.get('lawLabel')?.value,
                     symbol: symbol ? symbol.value : component.symbol,
                     baseComponent: component,
                 }

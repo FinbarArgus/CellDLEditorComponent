@@ -23,6 +23,8 @@ import type {
     LibraryComponentTemplate
 } from '#editor/components'
 
+import type { BorderStyle } from '#root/utils/borders'
+
 import type { BGBaseComponent } from '.'
 
 //==============================================================================
@@ -31,6 +33,7 @@ export interface BGElementStyle {
     text: string
     background: string
     border?: string
+    borderStyle?: BorderStyle
 }
 
 export interface BGComponentDefinition {

@@ -27,6 +27,8 @@ import type { Extent } from '#editor/geometry'
 import { lengthToPixels, pixelsToLength } from '#editor/geometry/units'
 import { round } from '#editor/utils'
 
+import { type BorderStyle, borderStroke, doubleInnerWidth, doubleInset } from '#root/utils/borders'
+
 import { latexAsSvgDocument } from '#root/mathjax'
 import type { PointLike } from '#root/utils/points'
 import { STYLE_STRING_FIELD_SEPARATOR, type StrokeAttributes } from '#root/utils/styling'
@@ -41,6 +43,7 @@ export const SVG_URI = 'http://www.w3.org/2000/svg'
 export interface LatexMathSvgOptions {
     background?: string
     border?: string
+    'border-style'?: BorderStyle
     'border-width'?: string
     class?: string
     'corner-radius'?: string
@@ -249,7 +252,9 @@ function latexToSvgRect(latex: string, suffix: string,
         gradient.push(...fill.gradient)
 
         // @ts-expect-error: `scale` is two long
-        const stroke = border ? ` stroke="${options.border}" stroke-width="${round(scale[0]*border)}"` : ''
+        const strokeWidth = scale[0]*border
+        const borderStyle = options['border-style'] || 'solid'
+        const stroke = border ? borderStroke(options.border!, strokeWidth, borderStyle) : ''
         const radius = getLengthFromOptions(options, 'corner-radius');
         // @ts-expect-error: `scale` is two long
         const cornerRadius = radius ? ` rx="${round(radius*scale[0])}"` : ''
@@ -258,6 +263,20 @@ function latexToSvgRect(latex: string, suffix: string,
         const rectClass = options.class ? ` class="${options.class}"` : ''
         const bgRect = `<rect ${topLeft}${rectSize} fill="${fill.fillAttribute}" data-fill-style="${fill.dataFillStyle}"${stroke}${cornerRadius}${rectClass}></rect>`
         svgElement.firstElementChild?.insertAdjacentHTML('afterend', bgRect)
+        if (border && borderStyle === 'double') {
+            // The inner line of a double border
+            const inset = doubleInset(strokeWidth)
+            // @ts-expect-error: `scale` is two long
+            const innerX = viewBox[0] + border*scale[0] + inset
+            // @ts-expect-error: `scale` is two long
+            const innerY = viewBox[1] + border*scale[1] + inset
+            // @ts-expect-error: `scale` is two long
+            const innerSize = ` width="${round(width - 2*border*scale[0] - 2*inset)}" height="${round(height - 2*border*scale[1] - 2*inset)}"`
+            // @ts-expect-error: `scale` is two long
+            const innerRadius = radius ? ` rx="${round(Math.max(0, radius*scale[0] - inset))}"` : ''
+            const innerRect = `<rect x="${round(innerX)}" y="${round(innerY)}"${innerSize} fill="none"${borderStroke(options.border!, doubleInnerWidth(strokeWidth))}${innerRadius}></rect>`
+            svgElement.firstElementChild?.nextElementSibling?.insertAdjacentHTML('afterend', innerRect)
+        }
 
         if (suffix !== '') {
             // @ts-expect-error: `scale` is two long
