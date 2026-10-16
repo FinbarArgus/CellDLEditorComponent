@@ -82,13 +82,17 @@ export function elementTemplatesQuery(base: string): string {
             OPTIONAL { ?element rdfs:label ?label }
             OPTIONAL { ?element bgf:hasSymbol ?symbol }
             OPTIONAL { ?subType bgf:constitutiveRelation ?relation }
-            OPTIONAL { ?element bgf:lawLabel ?lawLabel }
             OPTIONAL {
-                ?element bgf:hasStyle ?style .
-                OPTIONAL { ?style bgf:textColour ?textColour }
-                OPTIONAL { ?style bgf:backgroundColour ?backgroundColour }
-                OPTIONAL { ?style bgf:borderColour ?borderColour }
-                OPTIONAL { ?style bgf:borderStyle ?borderStyle }
+                # the template's, or for a composite (a template with its junction) its template's
+                ?element rdfs:subClassOf* ?lawTemplate .
+                ?lawTemplate bgf:lawLabel ?lawLabel .
+                OPTIONAL {
+                    ?lawTemplate bgf:hasStyle ?style .
+                    OPTIONAL { ?style bgf:textColour ?textColour }
+                    OPTIONAL { ?style bgf:backgroundColour ?backgroundColour }
+                    OPTIONAL { ?style bgf:borderColour ?borderColour }
+                    OPTIONAL { ?style bgf:borderStyle ?borderStyle }
+                }
             }
             FILTER (
                 exists { ?element a bgf:ElementTemplate }

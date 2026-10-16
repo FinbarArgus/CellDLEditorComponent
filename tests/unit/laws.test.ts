@@ -79,6 +79,14 @@ describe('the BG-RDF templates', async () => {
         expect(resistances.get('BernoulliHydraulicResistor')?.overrides.borderStyle).toBe('double')
     })
 
+    test('a composite (a template with its junction) is drawn as its template', () => {
+        const reactionNodes = templates('OneReactionNode')
+        expect(reactionNodes.get('SaturatingChemicalReactionNode')).toEqual(templates('Reaction').get('SaturatingChemicalReaction'))
+        expect(reactionNodes.get('ChemicalReactionNode')?.lawLabel).toBeUndefined()
+        expect(templates('ZeroStorageNode').get('SaturatingChemicalStorageNode')?.lawLabel).toBe('sat')
+        expect(templates('OneResistanceNode').get('BernoulliHydraulicResistanceNode')?.lawLabel).toBe('PB')
+    })
+
     test('within an element class, every labelled law is drawn differently from the others and the default', () => {
         for (const base of ['Reaction', 'Resistance', 'QuantityStore']) {
             const drawn = [...templates(base).values()].map(t =>
