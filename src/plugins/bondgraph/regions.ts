@@ -41,9 +41,7 @@ limitations under the License.
 // boundary between two regions, and grows with every wiggle, where length alone would favour a tight wiggly
 // boundary over a longer straight one.
 //
-// reorganise() lowers it: a force layout pulls each region's nodes together (and boundary steps between their
-// regions), then annealing moves single nodes to lower the full measure, keeping the best layout found, centred
-// where the layout was. A ring of six or more nodes on one circle (a cycle, findRings) moves and turns whole.
+// ./layout.ts reorganises a layout to lower it.
 
 //==============================================================================
 
@@ -54,6 +52,8 @@ export interface LayoutNode {
     w: number               // size
     h: number
     labels: string[]        // its regions: one, several (a step on a boundary) or none
+    kind?: string           // store, reaction, resistance, source or other (./layout.ts finds cycles by it)
+    text?: string           // its species, else its identifier (side compounds are known by it)
 }
 
 export interface LayoutBond {
@@ -100,7 +100,9 @@ export const WEIGHTS = {
     crossing: 2,
     stretch: 0.5,
     overlap: 20,
-    moved: 0.02
+    moved: 0.02,
+    circle: 30,             // per cycle drawn as a circle, times how far its nodes are from one (./layout.ts)
+    inside: 10              // per node inside a cycle's circle that isn't the cycle's (./layout.ts)
 }
 
 //==============================================================================
@@ -590,113 +592,7 @@ export function layoutComplexity(nodes: LayoutNode[], bonds: LayoutBond[], optio
 
 //==============================================================================
 
-/**
- * The part of `members` that is a cycle of the bond graph: its 2-core (members with two or more bonds to other
- * members, repeatedly), when that is connected and at least `minimum` strong, with the members bonded to it (a
- * chemostat beside a reaction of the cycle). Empty when there is no such cycle.
- */
-function cycleOf(members: number[], adjacency: Map<number, Set<number>>, minimum: number): number[] {
-    const inside = new Set(members)
-    const degree = (i: number, within: Set<number>) => [...(adjacency.get(i) ?? [])].filter(j => within.has(j)).length
-    const core = new Set(members)
-    for (let changed = true; changed;) {
-        changed = false
-        for (const i of [...core]) if (degree(i, core) < 2) { core.delete(i); changed = true }
-    }
-    if (core.size < minimum) return []
-    const first = core.values().next().value as number
-    const seen = new Set([first]), stack = [first]
-    while (stack.length) {
-        for (const j of adjacency.get(stack.pop()!) ?? []) if (core.has(j) && !seen.has(j)) { seen.add(j); stack.push(j) }
-    }
-    if (seen.size !== core.size) return []
-    return members.filter(i => core.has(i) || [...(adjacency.get(i) ?? [])].some(j => core.has(j) && inside.has(j)))
-}
-
-/**
- * Rings: six or more nodes on one circle that are a cycle of the bond graph (as a cycle is drawn), found by
- * voting: every three nodes give the circle through them, and a ring's nodes give the same circle many times.
- * Each ring is its nodes' indices.
- */
-export function findRings(nodes: LayoutNode[], bonds: LayoutBond[] = [],
-                          options: { minimum?: number, minRadius?: number } = {}): number[][] {
-    const index = new Map(nodes.map((n, i) => [n.id, i]))
-    const adjacency = new Map<number, Set<number>>()
-    for (const b of bonds) {
-        const i = index.get(b.a), j = index.get(b.b)
-        if (i === undefined || j === undefined) continue
-        if (!adjacency.has(i)) adjacency.set(i, new Set())
-        if (!adjacency.has(j)) adjacency.set(j, new Set())
-        adjacency.get(i)!.add(j); adjacency.get(j)!.add(i)
-    }
-    const minimum = options.minimum ?? 6
-    const minRadius = options.minRadius ?? 40
-    const votes = new Map<string, { x: number, y: number, r: number, n: number }>()
-    const n = nodes.length
-    for (let i = 0; i < n; i++) {
-        for (let j = i + 1; j < n; j++) {
-            for (let k = j + 1; k < n; k++) {
-                const a = nodes[i]!, b = nodes[j]!, c = nodes[k]!
-                const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y))
-                if (Math.abs(d) < 1e-6) continue
-                const a2 = a.x * a.x + a.y * a.y, b2 = b.x * b.x + b.y * b.y, c2 = c.x * c.x + c.y * c.y
-                const x = (a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / d
-                const y = (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d
-                const r = Math.hypot(a.x - x, a.y - y)
-                if (r < minRadius || r > 2000) continue
-                const key = `${Math.round(x / 8)},${Math.round(y / 8)},${Math.round(r / 8)}`
-                const vote = votes.get(key) ?? { x: 0, y: 0, r: 0, n: 0 }
-                vote.x += x; vote.y += y; vote.r += r; vote.n += 1
-                votes.set(key, vote)
-            }
-        }
-    }
-    const needed = minimum * (minimum - 1) * (minimum - 2) / 6
-    const candidates = [...votes.values()].filter(v => v.n >= needed).sort((p, q) => q.n - p.n)
-    const used = new Set<number>()
-    const rings: number[][] = []
-    for (const v of candidates) {
-        const x = v.x / v.n, y = v.y / v.n, r = v.r / v.n
-        const onCircle = nodes.map((_m, i) => i).filter(i => !used.has(i)
-            && Math.abs(Math.hypot(nodes[i]!.x - x, nodes[i]!.y - y) - r) < 0.06 * r + 4)
-        const members = cycleOf(onCircle, adjacency, minimum)
-        if (members.length < minimum) continue
-        // all round the circle: no gap wider than a third of it
-        const angles = members.map(i => Math.atan2(nodes[i]!.y - y, nodes[i]!.x - x)).sort((p, q) => p - q)
-        const gaps = angles.map((t, k) => (k + 1 < angles.length ? angles[k + 1]! : angles[0]! + 2 * Math.PI) - t)
-        if (Math.max(...gaps) > 2 * Math.PI / 3) continue
-        for (const i of members) used.add(i)
-        rings.push(members)
-    }
-    return rings
-}
-
-function random(seed: number): () => number {         // mulberry32
-    let a = seed >>> 0
-    return () => {
-        a = (a + 0x6D2B79F5) >>> 0
-        let t = a
-        t = Math.imul(t ^ (t >>> 15), t | 1)
-        t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-    }
-}
-
-export interface ReorganiseOptions {
-    seed?: number
-    forceSteps?: number
-    steps?: number                              // annealing moves
-    keepRings?: boolean                         // move each ring (findRings) as one body; default true
-    onProgress?: (done: number, of: number) => void | Promise<void>
-}
-
-export interface ReorganiseResult {
-    positions: Map<string, Point2>
-    before: Complexity
-    after: Complexity
-    rings: number                               // kept whole
-}
-
+/** The scales a layout's complexity is measured on: the nodes' spacing, a grid cell, a natural bond length. */
 export function complexityOptions(nodes: LayoutNode[], bonds: LayoutBond[]): ComplexityOptions {
     const spacing = layoutSpacing(nodes)
     const byId = new Map(nodes.map(n => [n.id, n]))
@@ -704,132 +600,6 @@ export function complexityOptions(nodes: LayoutNode[], bonds: LayoutBond[]): Com
                          .filter(([a, c]) => a && c).map(([a, c]) => Math.hypot(c!.x - a!.x, c!.y - a!.y))
     const bondLength = Math.min(3 * spacing, Math.max(spacing, median(lengths) || spacing))
     return { sigma: spacing, cell: spacing / 2, bondLength, gap: 0.25 * spacing }
-}
-
-/** A layout of lower complexity, from the nodes' current positions (see the module comment). */
-export async function reorganise(nodes: LayoutNode[], bonds: LayoutBond[],
-                                 options: ReorganiseOptions = {}): Promise<ReorganiseResult> {
-    const rand = random(options.seed ?? 1)
-    const base = complexityOptions(nodes, bonds)
-    const start = new Map(nodes.map(n => [n.id, { x: n.x, y: n.y }]))
-    const settings: ComplexityOptions = { ...base, start }
-    const work = nodes.map(n => ({ ...n }))
-    const index = new Map(work.map((n, i) => [n.id, i]))
-    const pairs = bonds.map(b => [index.get(b.a), index.get(b.b)] as const)
-                       .filter((p): p is readonly [number, number] => p[0] !== undefined && p[1] !== undefined)
-    const before = layoutComplexity(work, bonds, settings)
-    // a ring (a cycle drawn as a circle) moves and turns as one body
-    const rings = options.keepRings === false ? [] : findRings(nodes, bonds)
-    const ringOf = new Int32Array(work.length).fill(-1)
-    rings.forEach((ring, r) => { for (const i of ring) ringOf[i] = r })
-    const L = base.bondLength
-    const forceSteps = options.forceSteps ?? 300
-    const steps = options.steps ?? 4000
-    const total = forceSteps + steps
-
-    // forces: bonds as springs, nodes repel (more across regions), each region's nodes pulled together and a
-    // boundary step towards its regions
-    for (let it = 0; it < forceSteps; it++) {
-        const anchors = new Map<string, { x: number, y: number, n: number }>()
-        for (const n of work) {
-            if (n.labels.length !== 1) continue
-            const a = anchors.get(n.labels[0]!) ?? { x: 0, y: 0, n: 0 }
-            a.x += n.x; a.y += n.y; a.n += 1
-            anchors.set(n.labels[0]!, a)
-        }
-        const fx = new Float64Array(work.length), fy = new Float64Array(work.length)
-        const push = (i: number, x: number, y: number) => { fx[i] = fx[i]! + x; fy[i] = fy[i]! + y }
-        for (const [i, j] of pairs) {
-            const a = work[i]!, c = work[j]!
-            const dx = c.x - a.x, dy = c.y - a.y, d = Math.hypot(dx, dy) || 1e-6
-            const f = 0.1 * (d - L) / d
-            push(i, f * dx, f * dy); push(j, -f * dx, -f * dy)
-        }
-        for (let i = 0; i < work.length; i++) {
-            for (let j = i + 1; j < work.length; j++) {
-                const a = work[i]!, c = work[j]!
-                const dx = c.x - a.x, dy = c.y - a.y, d = Math.hypot(dx, dy) || 1e-6
-                if (d > 3 * L) continue
-                const across = a.labels.length === 1 && c.labels.length === 1 && a.labels[0] !== c.labels[0]
-                const f = (across ? 0.4 : 0.2) * L * (L / d) ** 2 / d
-                push(i, -f * dx, -f * dy); push(j, f * dx, f * dy)
-            }
-        }
-        work.forEach((n, i) => {
-            const targets = n.labels.map(l => anchors.get(l)).filter(a => a?.n)
-            if (targets.length === 0) return
-            const tx = targets.reduce((s, a) => s + a!.x / a!.n, 0) / targets.length
-            const ty = targets.reduce((s, a) => s + a!.y / a!.n, 0) / targets.length
-            const k = n.labels.length === 1 ? 0.05 : 0.1
-            push(i, k * (tx - n.x), k * (ty - n.y))
-        })
-        for (const ring of rings) {
-            const mx = ring.reduce((s, i) => s + fx[i]!, 0) / ring.length
-            const my = ring.reduce((s, i) => s + fy[i]!, 0) / ring.length
-            for (const i of ring) { fx[i] = mx; fy[i] = my }
-        }
-        const cap = L * (0.5 * (1 - it / forceSteps) + 0.05)
-        work.forEach((n, i) => {
-            const f = Math.hypot(fx[i]!, fy[i]!)
-            const scale = f > cap ? cap / f : 1
-            n.x += fx[i]! * scale; n.y += fy[i]! * scale
-        })
-        if (options.onProgress && it % 50 === 0) await options.onProgress(it, total)
-    }
-    const forced = layoutComplexity(work, bonds, settings)
-    const current: LayoutNode[] = forced.total < before.total ? work : nodes.map(n => ({ ...n }))
-    let energy = Math.min(forced.total, before.total)
-    let best = current.map(n => ({ ...n })), bestEnergy = energy
-
-    // annealing: move one node, or one ring, at a time (a ring sometimes turns instead); while a region is split,
-    // sometimes move the region's nodes in a stray piece together towards its largest piece
-    let split = layoutComplexity(current, bonds, settings)
-    for (let it = 0; it < steps; it++) {
-        const cooling = 1 - it / steps
-        const stray = split.subspaces > split.regions && rand() < 0.2
-            ? strayPieces(current, bonds, base).filter(p => p.members.every(i => ringOf[i]! < 0)) : []
-        const piece = stray.length ? stray[Math.floor(rand() * stray.length)]! : undefined
-        const k = Math.floor(rand() * current.length)
-        const moving = piece ? piece.members : ringOf[k]! >= 0 ? rings[ringOf[k]!]! : [k]
-        const old = moving.map(i => ({ x: current[i]!.x, y: current[i]!.y }))
-        if (piece) {
-            const cx = old.reduce((s, p) => s + p.x, 0) / old.length, cy = old.reduce((s, p) => s + p.y, 0) / old.length
-            const f = 0.3 + 0.7 * rand()
-            for (const i of moving) { current[i]!.x += f * (piece.x - cx); current[i]!.y += f * (piece.y - cy) }
-        } else if (moving.length > 1 && rand() < 0.3) {
-            const cx = old.reduce((s, p) => s + p.x, 0) / old.length, cy = old.reduce((s, p) => s + p.y, 0) / old.length
-            const turn = (rand() - 0.5) * 0.6 * (cooling + 0.1)
-            const cos = Math.cos(turn), sin = Math.sin(turn)
-            moving.forEach((i, m) => {
-                const dx = old[m]!.x - cx, dy = old[m]!.y - cy
-                current[i]!.x = cx + cos * dx - sin * dy; current[i]!.y = cy + sin * dx + cos * dy
-            })
-        } else {
-            const step = base.sigma * (0.8 * cooling + 0.1)
-            const angle = 2 * Math.PI * rand(), radius = step * Math.sqrt(-2 * Math.log(rand() + 1e-12))
-            for (const i of moving) { current[i]!.x += radius * Math.cos(angle); current[i]!.y += radius * Math.sin(angle) }
-        }
-        const measured = layoutComplexity(current, bonds, settings)
-        const e = measured.total
-        const temperature = 2 * cooling + 1e-3
-        if (e < energy || rand() < Math.exp(-(e - energy) / temperature)) {
-            energy = e
-            split = measured
-            if (e < bestEnergy) { bestEnergy = e; best = current.map(n => ({ ...n })) }
-        } else {
-            moving.forEach((i, m) => { current[i]!.x = old[m]!.x; current[i]!.y = old[m]!.y })
-        }
-        if (options.onProgress && it % 50 === 0) await options.onProgress(forceSteps + it, total)
-    }
-    // where the layout was
-    const shiftX = (nodes.reduce((s, n) => s + n.x, 0) - best.reduce((s, n) => s + n.x, 0)) / nodes.length
-    const shiftY = (nodes.reduce((s, n) => s + n.y, 0) - best.reduce((s, n) => s + n.y, 0)) / nodes.length
-    for (const n of best) { n.x += shiftX; n.y += shiftY }
-    const after = layoutComplexity(best, bonds, settings)
-    const positions = new Map(best.map(n => [n.id, { x: n.x, y: n.y }]))
-    return after.total < before.total
-        ? { positions, before, after, rings: rings.length }
-        : { positions: start, before, after: before, rings: rings.length }
 }
 
 //==============================================================================

@@ -8,6 +8,9 @@
                 | coefficients with a space (#[code 2 ADP[c]]), species joined by #[code  + ].
                 | A new species gets a new store.
             .layout
+                select#layout-preset(v-model="layoutPreset" aria-label="Reorganise option" :disabled="reorganising"
+                                     :title="LAYOUT_PRESETS.find(p => p.id === layoutPreset)?.description")
+                    option(v-for="p in LAYOUT_PRESETS" :key="p.id" :value="p.id") {{ p.name }}
                 button.reorganise(type="button" :disabled="reorganising || steps.length === 0" @click="reorganiseLayout")
                     | {{ reorganising ? `Reorganising… ${progress}%` : 'Reorganise by region' }}
                 button.undo(v-if="canUndo && !reorganising" type="button" @click="undoLayout") Undo reorganise
@@ -53,6 +56,7 @@ import { addReaction, applyEquation, takeAddedElements } from '#editor/editor/re
 import {
     canUndoReorganise, diagramLayout, REGION_COLOURS, reorganiseDiagram, undoReorganise
 } from '#editor/editor/regions'
+import { LAYOUT_PRESETS } from '#root/plugins/bondgraph/layout'
 
 import { componentLibraryPlugin } from '#root/plugins'
 import { equationText, type StepKind } from '#root/plugins/bondgraph/equations'
@@ -111,6 +115,7 @@ const groups = vue.computed(() => {
     return [...byKey.values()].sort((a, b) => rank(a) - rank(b) || a.key.localeCompare(b.key))
 })
 
+const layoutPreset = vue.ref('balanced')
 const reorganising = vue.ref(false)
 const progress = vue.ref(0)
 const layoutStatus = vue.ref('')
@@ -126,10 +131,11 @@ async function reorganiseLayout() {
     progress.value = 0
     layoutStatus.value = ''
     try {
-        const result = await reorganiseDiagram((done, of) => { progress.value = Math.round(100 * done / of) })
+        const result = await reorganiseDiagram((done, of) => { progress.value = Math.round(100 * done / of) }, {},
+                                               layoutPreset.value)
         if (!result) return
         const { before, after, rings } = result
-        const kept = rings ? ` ${rings} cycle${rings === 1 ? '' : 's'} kept as drawn.` : ''
+        const kept = rings ? ` ${rings} cycle${rings === 1 ? '' : 's'} drawn as a circle.` : ''
         layoutStatus.value = after.total < before.total
             ? `Complexity ${before.total.toFixed(0)} → ${after.total.toFixed(0)}: ${describe(after.subspaces, after.regions)}, `
               + `${after.crossings} crossing bond${after.crossings === 1 ? '' : 's'} (were ${before.crossings}).${kept}`
@@ -201,6 +207,14 @@ vue.onUnmounted(() => {
     flex-wrap: wrap;
     gap: 6px;
     margin-bottom: 12px;
+}
+.layout select {
+    flex-basis: 100%;
+    padding: 4px 6px;
+    border: 1px solid var(--p-content-border-color);
+    border-radius: 4px;
+    background: var(--p-content-background);
+    color: var(--p-text-color);
 }
 .layout button {
     padding: 4px 10px;

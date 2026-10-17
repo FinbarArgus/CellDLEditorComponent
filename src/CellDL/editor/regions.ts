@@ -28,8 +28,9 @@ import { componentLibraryPlugin } from '#root/plugins'
 import type { BondgraphPlugin } from '#root/plugins/bondgraph'
 import {
     type Complexity, complexityOptions, connectRegions, type LayoutBond, type LayoutNode, layoutComplexity,
-    type Point2, regionComponents, regionGrid, regionLoops, reorganise, sortedLabels
+    type Point2, regionComponents, regionGrid, regionLoops, sortedLabels
 } from '#root/plugins/bondgraph/regions'
+import { type LayoutOptions, presetOptions, reorganiseLayout } from '#root/plugins/bondgraph/layout'
 import { SVG_URI } from '#root/utils/svgUtils'
 
 import { CellDLEditor, notifyChanges } from '.'
@@ -48,19 +49,29 @@ function plugin(): BondgraphPlugin|undefined {
     return componentLibraryPlugin.getPlugin('bondgraph-components') as unknown as BondgraphPlugin|undefined
 }
 
-/** The diagram's components as layout nodes (centre, size, regions), and its bonds. */
+const BGF = 'https://bg-rdf.org/ontologies/bondgraph-framework#'
+const KINDS: Record<string, string> = {
+    [`${BGF}QuantityStore`]: 'store', [`${BGF}Reaction`]: 'reaction', [`${BGF}Resistance`]: 'resistance',
+    [`${BGF}PotentialSource`]: 'source', [`${BGF}FlowSource`]: 'source'
+}
+
+/** The diagram's components as layout nodes (centre, size, regions, kind, species), and its bonds. */
 export function diagramLayout(): { nodes: LayoutNode[], bonds: LayoutBond[], objects: Map<string, CellDLObject> } {
     const nodes: LayoutNode[] = [], objects = new Map<string, CellDLObject>()
     const diagram = CellDLEditor.instance?.celldlDiagram
     const layout = plugin()?.regionLayout()
     if (!diagram?.svgDiagram || !layout) return { nodes, bonds: [], objects }
+    const elements = new Map((plugin()?.namingElements() ?? []).map(e => [e.id, e]))
     for (const element of diagram.svgDiagram.querySelectorAll('g.celldl-Component')) {
         const object = diagram.objectById(element.id)
         const svg = object?.celldlSvgElement
         if (!object || !svg) continue
         const centre = svg.centroid
+        const named = elements.get(object.uri.value)
         nodes.push({ id: object.uri.value, x: centre.x, y: centre.y, w: svg.width, h: svg.height,
-                     labels: layout.regions.get(object.uri.value) ?? [] })
+                     labels: layout.regions.get(object.uri.value) ?? [],
+                     kind: (named?.elementClass && KINDS[named.elementClass]) || 'other',
+                     text: named?.species || named?.identifier })
         objects.set(object.uri.value, object)
     }
     const ids = new Set(nodes.map(n => n.id))
@@ -230,27 +241,29 @@ export function currentComplexity(): Complexity|undefined {
 }
 
 /**
- * Move the diagram's nodes to a layout of lower complexity. Returns its complexity before and after (after
- * equals before when no better layout was found, and nothing moves). undoReorganise() puts them back.
+ * Move the diagram's nodes to a layout of lower complexity (../../plugins/bondgraph/layout.ts), by one of its
+ * presets, adjusted by `options`. Returns its measures before and after (after equals before when no simpler
+ * layout was found, and nothing moves) and the cycles drawn as circles. undoReorganise() puts the nodes back.
  */
 export async function reorganiseDiagram(onProgress?: (done: number, of: number) => void,
-                                        options: { steps?: number, forceSteps?: number, seed?: number } = {}) {
+                                        options: Partial<LayoutOptions> = {}, preset: string = 'balanced') {
     const { nodes, bonds, objects } = diagramLayout()
     if (nodes.length === 0) return
-    const result = await reorganise(nodes, bonds, {
-        ...options,
-        onProgress: async (done, of) => {
+    const chosen = presetOptions(preset)
+    const result = await reorganiseLayout(nodes, bonds,
+        { ...chosen, ...options, weights: { ...chosen.weights, ...options.weights } },
+        async (done, of) => {
             onProgress?.(done, of)
             await new Promise(resolve => setTimeout(resolve, 0))      // keep the editor responsive
-        }
-    })
-    if (result.after.total < result.before.total) {
+        })
+    if (result.improved) {
         lastPositions = new Map(nodes.map(n => [n.id, { x: n.x, y: n.y }]))
         moveTo(objects, result.positions)
     }
     drawRegions()
     drawBondCounts()
-    return { before: result.before, after: result.after, rings: result.rings }
+    return { before: result.before.complexity, after: result.after.complexity, measures: result,
+             rings: result.cycles.length }
 }
 
 export function canUndoReorganise(): boolean {
