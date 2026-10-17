@@ -97,7 +97,11 @@ const scenario = (src: string) => `(async () => {
     const checks = []
     const check = (what, ok, detail) => checks.push({ what, ok: !!ok, detail })
 
-    if (${process.env.SAVE_ONLY === '1'}) return { checks, document: await diagram.serialise() }
+    // the variables' names as the document stands, before any edit (to compare with bgtool --list-variables)
+    const namingModule = await import('${src}/plugins/bondgraph/naming.ts')
+    const asOpened = Object.fromEntries([...namingModule.previewNames(plugin.namingElements(), [], new Map())]
+        .map(([key, name]) => [key.split('#').pop(), name]))
+    if (${process.env.SAVE_ONLY === '1'}) return { checks, document: await diagram.serialise(), asOpened }
 
     // the panel itself: opened with its button, a row per step; typing an equation and Enter edits the bond graph
     document.getElementById('reactions-panel').click()
@@ -202,8 +206,25 @@ const scenario = (src: string) => `(async () => {
         check('undo reorganise puts the nodes back', differ.length === 0,
               differ.slice(0, 3).map(p => p + ' was ' + placed[where().indexOf(p)]))
     }
-    // the Variables panel: choose a convention and apply it; it is saved with the document
+    // an element's hover: its typeset law, and its symbols' CellML names with what the bonds make them
     const naming = await import('${src}/plugins/bondgraph/naming.ts')
+    const named = () => { const n = plugin.naming(); return naming.previewNames(plugin.namingElements(), n.rules, n.overrides) }
+    const hoverOf = id => componentLibraryPlugin.hoverHtml(diagram.objectById(id.split('#').pop()))
+    const reactionStep = steps().find(e => e.kind === 'reaction' && e.substrates.some(p => p.node))
+    const reactionHover = hoverOf(reactionStep.id)
+    const substrateNames = reactionStep.substrates.filter(p => p.node).map(p => named().get(p.node + '|u'))
+    const forward = (reactionHover.match(/u_f = [^<]*/) ?? [''])[0]
+    check('a reaction\\'s hover shows its law and the potentials bonded to its forward side',
+          reactionHover.includes('<svg') && substrateNames.every(n => forward.includes(n)), forward)
+    const storeNode = plugin.speciesNodes().find(n => !n.isSource)
+    const storeHover = storeNode ? hoverOf(storeNode.id) : ''
+    const feeding = steps().filter(e => [...e.substrates, ...e.products].some(p => p.node === storeNode?.id))
+                           .map(e => named().get(e.id + '|v'))
+    const flowLine = (storeHover.match(/(^|>)v = [^<]*/) ?? [''])[0]
+    check('a store\\'s hover shows its law and the flows of its reactions', storeHover.includes('<svg') && feeding.length > 0
+          && feeding.every(n => flowLine.includes(n)), flowLine)
+
+    // the Variables panel: choose a convention and apply it; it is saved with the document
     document.getElementById('variables-panel').click()
     await wait(500)
     const shownElements = document.querySelectorAll('details.element').length
@@ -221,7 +242,7 @@ const scenario = (src: string) => `(async () => {
           && saved.rules.length === chemistry.rules.length, saved.rules.length)
     const preview = naming.previewNames(plugin.namingElements(), saved.rules, saved.overrides)
     const names = Object.fromEntries([...preview].map(([key, name]) => [key.split('#').pop(), name]))
-    return { checks, document: await diagram.serialise(), names }
+    return { checks, document: await diagram.serialise(), names, asOpened }
 })()`
 
 let failed = false
@@ -236,7 +257,7 @@ try {
         console.error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text)
         failed = true
     } else {
-        const { checks, document: edited, names } = result.result.value
+        const { checks, document: edited, names, asOpened } = result.result.value
         for (const c of checks) {
             console.log(`${c.ok ? 'ok  ' : 'FAIL'} ${c.what}${c.detail !== undefined ? `: ${JSON.stringify(c.detail)}` : ''}`)
             failed ||= !c.ok
@@ -255,6 +276,7 @@ try {
             if (names) {
                 // the Variables panel's names, element|variable -> name, to compare with bgtool --list-variables
                 writeFileSync(`${out}.names.json`, JSON.stringify(names, null, 1))
+                writeFileSync(`${out}.opened-names.json`, JSON.stringify(asOpened, null, 1))
                 console.log(`its variable names: ${out}.names.json`)
             }
         }

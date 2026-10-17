@@ -91,14 +91,43 @@ export function renderName(pattern: string, values: { var: string, element: stri
     return validName(filled, values.var)
 }
 
-/** The bond graph's name for an element (its symbol, species and location), as bg2cellml makes it. */
-export function elementName(e: NamingElement): string {
-    return [e.label || e.identifier, e.species, e.location].filter(Boolean).join('_').replace(/[\\{}^$]/g, '')
+// bg2cellml's clean_latex (species and locations) and clean_name (identifiers)
+function cleanLatex(latex: string): string {
+    return latex.trim().replace(/\\[^{]*\{([^}]*)\}/g, '_$1').replace(/\^/g, '_').replace(/[^a-zA-Z_0-9]/g, '').replace(/^_*/, '')
+}
+function cleanName(name: string): string {
+    return name.replace(/[:\-. ]/g, '_')
 }
 
-/** The bond graph's name for one of an element's variables. */
-export function bondgraphName(e: NamingElement, variable: string): string {
-    return variable === e.intrinsic ? elementName(e) : `${variable}_${elementName(e)}`
+/** The bond graph's name for an element on its own (its symbol, species and location), as bg2cellml makes it. */
+export function elementName(e: NamingElement): string {
+    let name = e.label || e.identifier
+    if (e.species) name += `_${cleanLatex(e.species)}`
+    if (e.location) name += `_${cleanLatex(e.location)}`
+    return name
+}
+
+/**
+ * Every element's bond graph name, as bg2cellml makes them: in the order of the elements' identifiers, an element
+ * whose name is taken (a copy of a chemostat) is named by its identifier instead, numbered if that is taken too.
+ */
+export function elementNames(elements: NamingElement[]): Map<string, string> {
+    const names = new Map<string, string>(), taken = new Set<string>()
+    for (const e of [...elements].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) {
+        let name = elementName(e)
+        if (taken.has(name)) {
+            name = cleanName(e.identifier)
+            for (let n = 2; taken.has(name); n++) name = `${cleanName(e.identifier)}_${n}`
+        }
+        taken.add(name)
+        names.set(e.id, name)
+    }
+    return names
+}
+
+/** The bond graph's name for one of an element's variables (`element`: its name from elementNames). */
+export function bondgraphName(e: NamingElement, variable: string, element: string = elementName(e)): string {
+    return variable === e.intrinsic ? element : `${variable}_${element}`
 }
 
 /** The most specific rule for one of an element's variables: for its class and domain, its class, its domain, or neither. */
@@ -118,6 +147,7 @@ export function previewNames(elements: NamingElement[], rules: NamingRule[], ove
                              reserved: string[] = ['t', 'RT', 'F']): Map<string, string> {
     const names = new Map<string, string>()
     const taken = new Set(reserved)
+    const ofElement = elementNames(elements)
     const ordered = [...elements].sort((a, b) => a.identifier < b.identifier ? -1 : a.identifier > b.identifier ? 1 : 0)
     for (const e of ordered) {
         for (const variable of e.variables) {
@@ -126,10 +156,10 @@ export function previewNames(elements: NamingElement[], rules: NamingRule[], ove
             const rule = ruleFor(rules, e.elementClass, e.domain, variable)
             const wanted = given !== undefined && given !== '' ? validName(given, variable)
                          : rule ? renderName(rule.pattern, {
-                               var: variable, element: elementName(e), label: e.label ?? '', species: e.species ?? '',
-                               location: e.location ?? '', name: e.species || e.identifier
+                               var: variable, element: ofElement.get(e.id) ?? elementName(e), label: e.label ?? '',
+                               species: e.species ?? '', location: e.location ?? '', name: e.species || e.identifier
                            })
-                         : bondgraphName(e, variable)
+                         : bondgraphName(e, variable, ofElement.get(e.id))
             let name = wanted
             for (let n = 2; taken.has(name); n++) name = `${wanted}_${n}`
             taken.add(name)

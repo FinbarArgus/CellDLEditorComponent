@@ -50,7 +50,7 @@ import * as vue from 'vue'
 import { componentLibraryPlugin } from '#root/plugins'
 import type { BondgraphPlugin } from '#root/plugins/bondgraph'
 import {
-    bondgraphName, DOMAINS, ELEMENT_CLASSES, matchingPreset, NAMING_PRESETS, type NameOverrides, type NamingElement,
+    bondgraphName, DOMAINS, ELEMENT_CLASSES, elementNames, matchingPreset, NAMING_PRESETS, type NameOverrides, type NamingElement,
     type NamingRule, previewNames
 } from '#root/plugins/bondgraph/naming'
 
@@ -152,7 +152,7 @@ function choosePreset(id: string) {
 
 function describe(): string {
     const renamed = sortedElements.value.flatMap(e => e.variables.map(v => [e, v] as const))
-        .filter(([e, v]) => preview.value.get(`${e.id}|${v}`) !== bondgraphName(e, v)).length
+        .filter(([e, v]) => preview.value.get(`${e.id}|${v}`) !== bondgraphName(e, v, elementNames(elements.value).get(e.id))).length
     return renamed === 0 ? 'The CellML uses the bond graph\'s names.'
          : `${renamed} variable${renamed === 1 ? '' : 's'} named differently from the bond graph. `
            + 'bg2cellml uses these names when it writes the CellML (bgtool --list-variables lists them).'

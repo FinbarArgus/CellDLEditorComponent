@@ -120,6 +120,14 @@ export interface PluginInterface {
     hoverText?: (celldlObject: CellDLObject) => string
 
     /**
+     * HTML to show beside a CellDL object while the pointer is over it, in place of its hover text (e.g. an
+     * element's constitutive law); '' for none.
+     *
+     * @param celldlObject A CellDL object.
+     */
+    hoverHtml?: (celldlObject: CellDLObject) => string
+
+    /**
      * The diagram's reactions (and other steps) as equations, for the reaction equations view.
      */
     reactionEquations?: () => StepEquation[]
@@ -364,6 +372,11 @@ export class ComponentLibraryPlugin {
     hoverText(celldlObject: CellDLObject): string {
         return [...this.#registeredPlugins.values().map(plugin => plugin.hoverText?.(celldlObject) ?? '')]
                 .filter(t => t !== '').join('\n')
+    }
+
+    hoverHtml(celldlObject: CellDLObject): string {
+        return [...this.#registeredPlugins.values().map(plugin => plugin.hoverHtml?.(celldlObject) ?? '')]
+                .filter(t => t !== '').join('')
     }
 
     reactionEquations(): StepEquation[] {

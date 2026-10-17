@@ -86,7 +86,9 @@ import {
 } from './definitions'
 import { type BondInfo, equationText, type NodeInfo, type SpeciesNode, type StepEquation, stepEquation } from './equations'
 import { elementTemplatesQuery, styleOverrides, templateStyle } from './laws'
-import { ELEMENT_CLASSES, type NameOverrides, type NamingElement, type NamingRule } from './naming'
+import { type MathNode, mathmlLatex, sumText, whereText } from './lawtext'
+import { ELEMENT_CLASSES, type NameOverrides, type NamingElement, type NamingRule, previewNames } from './naming'
+import { latexAsSvgString } from '#root/mathjax'
 import type {
     BGComponentLibrary,
     BGLibraryComponentTemplate,
@@ -634,7 +636,9 @@ export class BondgraphPlugin implements PluginInterface {
             const flow = domain?.flow.name ?? 'v', potential = domain?.potential.name ?? 'u'
             const ports = elementClass === BGF.uri('Reaction').value ? [flow, `${potential}_f`, `${potential}_r`]
                         : [flow, potential]
-            const intrinsic = template.value?.name
+            // a store's quantity takes the element's own name (a source's potential doesn't)
+            const value = template.value?.name
+            const intrinsic = value !== undefined && value === (domain?.quantity.name ?? 'q') ? value : undefined
             const variables = [...ports, ...template.parameters.keys(), ...template.variables.keys()]
                               .filter(v => v !== intrinsic)
             if (intrinsic) variables.push(intrinsic)
@@ -777,6 +781,104 @@ export class BondgraphPlugin implements PluginInterface {
                 PREFIX : <${this.#currentDocumentUri}#>
                 INSERT DATA { ${uri} bgf:bondCount ${Math.round(count)} }`)
         }
+    }
+
+    #lawCache = new Map<string, { label: string, latex: string, svg: string }|null>()
+
+    // a template's constitutive relation (its own or the nearest superclass's) as LaTeX and typeset SVG, and its label
+    #law(templateType: string): { label: string, latex: string, svg: string }|null {
+        if (this.#lawCache.has(templateType)) return this.#lawCache.get(templateType)!
+        let found: { label: string, latex: string, svg: string }|null = null
+        const queue = [templateType], seen = new Set<string>()
+        let label = ''
+        while (queue.length && !found) {
+            const type = queue.shift()!
+            if (seen.has(type)) continue
+            seen.add(type)
+            for (const r of this.#rdfStore.query(`${SPARQL_PREFIXES}
+                SELECT ?relation ?label WHERE {
+                    OPTIONAL { <${type}> bgf:constitutiveRelation ?relation }
+                    OPTIONAL { <${type}> rdfs:label ?label }
+                }`) as Map<string, $rdf.Term>[]) {
+                if (!label && r.get('label')) label = r.get('label')!.value
+                const relation = r.get('relation')?.value
+                if (relation && !found) {
+                    const math = new DOMParser().parseFromString(relation.trim(), 'text/xml').documentElement
+                    const latex = mathmlLatex(math as unknown as MathNode)
+                    found = { label, latex, svg: latex ? latexAsSvgString(latex, true) : '' }
+                }
+            }
+            for (const r of this.#rdfStore.query(`${SPARQL_PREFIXES}
+                SELECT ?super WHERE { <${type}> rdfs:subClassOf ?super }`) as Map<string, $rdf.Term>[]) {
+                queue.push(r.get('super')!.value)
+            }
+        }
+        if (found && !found.label) found.label = label
+        this.#lawCache.set(templateType, found)
+        return found
+    }
+
+    /**
+     * What an element's hover shows (./lawtext.ts): its constitutive law, typeset in its template's symbols, and
+     * each symbol's CellML name (./naming.ts) with what the bonds make it: a reaction's u_f and u_r (the potentials
+     * bonded to each side, a transformer's scaled by its ratio), a store's flow (its reactions' flows), a
+     * resistance's potential (the difference across it). '' for an element without a law.
+     */
+    hoverHtml(celldlObject: CellDLObject): string {
+        if (celldlObject.isConnection) return ''
+        const templateType = (<PluginData>celldlObject.pluginData(this.id)).elementTemplate?.type
+        const law = templateType ? this.#law(templateType) : null
+        if (!law) return ''
+        const id = celldlObject.uri.value
+        const elements = this.namingElements()
+        const element = elements.find(e => e.id === id)
+        if (!element) return ''
+        const { rules, overrides } = this.naming()
+        const names = previewNames(elements, rules, overrides)
+        const { bonds, nodes } = this.#diagramGraph()
+        const byId = new Map(elements.map(e => [e.id, e]))
+        const portName = (node: string, port: 'flow'|'potential') => {
+            const e = byId.get(node)
+            const domain = e?.domain ? this.#physicalDomains.get(e.domain) : undefined
+            const symbol = port === 'flow' ? (domain?.flow.name ?? 'v') : (domain?.potential.name ?? 'u')
+            return names.get(`${node}|${symbol}`) ?? symbol
+        }
+        const domain = element.domain ? this.#physicalDomains.get(element.domain) : undefined
+        const u = domain?.potential.name ?? 'u', v = domain?.flow.name ?? 'v'
+        const connected = new Map<string, string>()
+        if (element.elementClass === BGF.uri('Reaction').value) {
+            const side = (into: boolean) => sumText(bonds.flatMap(b => {
+                const other = into ? (b.target === id ? b.source : undefined) : (b.source === id ? b.target : undefined)
+                if (other === undefined) return []
+                const ratio = nodes.get(other)?.transformRatio
+                if (ratio !== undefined) {      // a transformer between this step and a capacitor
+                    const capacitor = into ? bonds.find(c => c.target === other)?.source : bonds.find(c => c.source === other)?.target
+                    return capacitor ? [{ sign: 1, count: into ? ratio : 1 / ratio, name: portName(capacitor, 'potential') }] : []
+                }
+                return [{ sign: 1, count: b.count, name: portName(other, 'potential') }]
+            }))
+            connected.set(`${u}_f`, side(true))
+            connected.set(`${u}_r`, side(false))
+        } else if (element.elementClass === BGF.uri('QuantityStore').value) {
+            connected.set(v, sumText(bonds.flatMap(b => b.target === id ? [{ sign: 1, count: b.count, name: portName(b.source, 'flow') }]
+                                                      : b.source === id ? [{ sign: -1, count: b.count, name: portName(b.target, 'flow') }]
+                                                      : [])))
+        } else if (element.elementClass === BGF.uri('Resistance').value) {
+            connected.set(u, sumText(bonds.flatMap(b => b.target === id ? [{ sign: 1, count: 1, name: portName(b.source, 'potential') }]
+                                                      : b.source === id ? [{ sign: -1, count: 1, name: portName(b.target, 'potential') }]
+                                                      : [])))
+        }
+        const lines = whereText(element.variables.map(symbol => ({
+            symbol, name: names.get(`${id}|${symbol}`) ?? symbol, is: connected.get(symbol)
+        })))
+        const step = this.reactionEquations().find(eq => eq.id === id)
+        const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        return '<div class="bg-law">'
+            + (step ? `<div class="bg-law-equation">${escape(equationText(step))}</div>` : '')
+            + (law.label ? `<div class="bg-law-label">${escape(law.label)}</div>` : '')
+            + (law.svg ? `<div class="bg-law-math">${law.svg}</div>` : '')
+            + `<div class="bg-law-where">${lines.map(escape).join('<br>')}</div>`
+            + '</div>'
     }
 
     hoverText(celldlObject: CellDLObject): string {

@@ -53,6 +53,9 @@ describe('variable names', () => {
         expect(names.get('m#q_B|q')).toBe(bondgraphName(elements[4]!, 'q'))
         expect(names.get('m#q_B|q')).toBe('q_B_B_c')
         expect(names.get('m#Re_1|kappa')).toBe('kappa_Re_1')
+        // copies of a chemostat: the later is named by its identifier (bgtool --list-variables: u_Se_A_c, u_Se_A_2)
+        expect(names.get('m#Se_A_1|u')).toBe('u_Se_A_c')
+        expect(names.get('m#Se_A_2|u')).toBe('u_Se_A_2')
     })
 
     test('a preset is recognised in its rules, whatever their order', () => {
