@@ -39,3 +39,6 @@ components.d.ts
 
 # BG-RDF
 src/assets/bg-rdf/*
+
+# specs served while rendering CellDL (scripts/render-celldl.ts)
+app/render-specs/

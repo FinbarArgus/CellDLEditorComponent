@@ -52,6 +52,7 @@
         "lint": "bunx --bun biome lint --config-path ./biome.json --fix --error-on-warnings --max-diagnostics=none",
         "start": "cd app && bun run build:dev && vite preview",
         "test": "./scripts/install-bgrdf.sh && bun test tests/unit",
+        "render-celldl": "./scripts/install-bgrdf.sh && bun scripts/render-celldl.ts",
         "version:new": "bun scripts/version.js"
     },
     "dependencies": {
