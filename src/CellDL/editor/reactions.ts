@@ -39,7 +39,7 @@ import { Point, type PointLike } from '#root/utils/points'
 import { CONNECTION_COLOUR, CONNECTION_WIDTH } from '#root/utils/styling'
 import { svgPathElement } from '#root/utils/svgUtils'
 
-import { CellDLEditor } from '.'
+import { CellDLEditor, notifyChanges } from '.'
 
 //==============================================================================
 
@@ -228,6 +228,7 @@ export async function applyEquation(stepUri: string, text: string): Promise<numb
     for (const edit of edits) {
         await applyEdit(step, edit, taken)
     }
+    if (edits.length) notifyChanges()     // a changed bondCount alone touches only the RDF
     return edits.length
 }
 

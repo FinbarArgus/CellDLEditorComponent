@@ -13,12 +13,12 @@
                 .heading
                     span.name {{ step.name }}
                     span.kind {{ step.kind === 'reaction' ? 'reaction ⇌' : step.kind === 'transport' ? 'transport ⇄' : 'flow ⇄' }}
-                input.equation(
-                    type="text"
+                textarea.equation(
                     v-model="step.text"
+                    :rows="Math.max(1, Math.ceil(step.text.length / 24))"
                     :aria-label="`Equation of ${step.name}`"
                     spellcheck="false"
-                    @keydown.enter="apply(step)"
+                    @keydown.enter.prevent="apply(step)"
                     @keydown.escape="refresh"
                 )
                 .error(v-if="errors[step.id]") {{ errors[step.id] }}
@@ -49,7 +49,7 @@ import ToolPanel from './ToolPanel.vue'
 
 //==============================================================================
 
-defineProps<{
+const props = defineProps<{
     title: string
     toolId: string
 }>()
@@ -101,12 +101,20 @@ function diagramEdited() {
     if (!editing) refresh()
 }
 
+// the panel is made with the editor, before a diagram is open: read the diagram whenever the panel opens
+function toolbarEvent(event: Event) {
+    const detail = (<CustomEvent>event).detail
+    if (detail?.type === 'state' && detail.source === props.toolId && detail.value) refresh()
+}
+
 vue.onMounted(() => {
     refresh()
     document.addEventListener('file-edited', diagramEdited)
+    document.addEventListener('toolbar-event', toolbarEvent)
 })
 vue.onUnmounted(() => {
     document.removeEventListener('file-edited', diagramEdited)
+    document.removeEventListener('toolbar-event', toolbarEvent)
 })
 </script>
 
@@ -141,7 +149,7 @@ vue.onUnmounted(() => {
 .step.transport .heading .kind, .step.flow .heading .kind {
     color: #2e75b6;
 }
-input {
+input, textarea {
     width: 100%;
     box-sizing: border-box;
     padding: 4px 6px;
@@ -150,7 +158,8 @@ input {
     background: var(--p-content-background);
     color: var(--p-text-color);
 }
-input.equation {
+.equation {
+    resize: vertical;
     font-family: ui-monospace, monospace;
     font-size: 0.85rem;
 }

@@ -98,6 +98,27 @@ const scenario = (src: string) => `(async () => {
     const check = (what, ok, detail) => checks.push({ what, ok: !!ok, detail })
 
     if (${process.env.SAVE_ONLY === '1'}) return { checks, document: await diagram.serialise() }
+
+    // the panel itself: opened with its button, a row per step; typing an equation and Enter edits the bond graph
+    document.getElementById('reactions-panel').click()
+    await wait(500)
+    const rows = () => [...document.querySelectorAll('.reactions-step .equation')]
+    check('the panel shows every step', rows().length === steps().length && rows().length > 0,
+          rows().length + ' rows, ' + steps().length + ' steps')
+    const row = rows()[0]
+    const shown = steps()[0]
+    if (row && shown && shown.substrates.length) {
+        const typed = row.value.replace(term(shown.substrates[0]), term({ ...shown.substrates[0], count: 3 * shown.substrates[0].count }))
+        row.value = typed
+        row.dispatchEvent(new Event('input'))
+        row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+        await wait(500)
+        check('typing an equation edits the bond graph', text(shown.id) === equationText(steps()[0]) && text(shown.id) !== equationText(shown)
+              && steps()[0].substrates[0].count === 3 * shown.substrates[0].count, text(shown.id))
+        await applyEquation(shown.id, equationText(shown))
+        await wait(300)
+        check('the panel follows the diagram', rows()[0].value === equationText(shown), rows()[0].value)
+    }
     const step = steps().find(e => e.kind === 'reaction' && e.substrates.length && e.products.length)
     const original = text(step.id)
     const location = step.substrates[0].location
