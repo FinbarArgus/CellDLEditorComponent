@@ -1,8 +1,8 @@
 /** biome-ignore-all lint/style/noNonNullAssertion: <test fixtures exist> */
 import { describe, expect, test } from 'bun:test'
 
-import { circularity, findCycles, presetOptions, reorganiseLayout } from '../../src/plugins/bondgraph/layout'
-import { complexityOptions, type LayoutBond, type LayoutNode, layoutComplexity } from '../../src/plugins/bondgraph/regions'
+import { circularity, findCycles, lineCount, planRectangles, presetOptions, reorganiseLayout } from '../../src/plugins/bondgraph/layout'
+import type { LayoutBond, LayoutNode } from '../../src/plugins/bondgraph/regions'
 
 const node = (id: string, x: number, y: number, labels: string[], kind = 'store', text = id): LayoutNode =>
     ({ id, x, y, w: 30, h: 20, labels, kind, text })
@@ -89,21 +89,87 @@ describe('reorganising', () => {
     })
 
     test('every preset leaves the regions no more split than they were', async () => {
-        for (const id of ['balanced', 'crossings', 'compact', 'regions', 'cycles', 'gentle']) {
+        for (const id of ['balanced', 'crossings', 'compact', 'regions', 'cycles', 'aligned', 'gentle', 'freeform']) {
             const result = await reorganiseLayout(nodes, bonds, { ...presetOptions(id), steps: 200 })
             expect(result.after.complexity.subspaces).toBeLessThanOrEqual(result.before.complexity.subspaces)
         }
+    })
+
+    test('regions become rectangles, each node in its own and the step on their shared edge', async () => {
+        const result = await reorganiseLayout(nodes, bonds, options)
+        const rects = result.rectangles!
+        expect([...rects.keys()].sort()).toEqual(['c', 'm'])
+        expect(result.after.complexity.rectangular).toBe(true)
+        const at = (id: string) => result.positions.get(id)!
+        const inside = (p: { x: number, y: number }, l: string) => {
+            const r = rects.get(l)!
+            return p.x >= r.x0 - 1e-6 && p.x <= r.x1 + 1e-6 && p.y >= r.y0 - 1e-6 && p.y <= r.y1 + 1e-6
+        }
+        for (const n of nodes) for (const l of n.labels) expect(inside(at(n.id), l)).toBe(true)
+        const c = rects.get('c')!, m = rects.get('m')!
+        const p = at('t')
+        expect([c.x0, c.x1, c.y0, c.y1].some(v => Math.abs(v - p.x) < 1e-6 || Math.abs(v - p.y) < 1e-6)).toBe(true)
+        expect([m.x0, m.x1, m.y0, m.y1].some(v => Math.abs(v - p.x) < 1e-6 || Math.abs(v - p.y) < 1e-6)).toBe(true)
+    })
+
+    test('nodes of a kind line up: fewer columns and rows than without the cost', async () => {
+        const aligned = await reorganiseLayout(nodes, bonds, options)
+        const free = await reorganiseLayout(nodes, bonds, { ...options, weights: { ...options.weights, align: 0 } })
+        const lines = (r: typeof aligned) => r.after.columns + r.after.rows
+        expect(lines(aligned)).toBeLessThan(lines(free))
     })
 
     test('a layout it cannot improve is left where it is', async () => {
         const tidy = [node('a', 0, 0, ['c']), node('b', 0, 80, ['c']), node('r', 80, 40, ['c', 'm'], 'reaction'),
                       node('x', 160, 0, ['m']), node('y', 160, 80, ['m'])]
         const tidyBonds = [{ a: 'a', b: 'r' }, { a: 'b', b: 'r' }, { a: 'r', b: 'x' }, { a: 'r', b: 'y' }]
-        const before = layoutComplexity(tidy, tidyBonds, complexityOptions(tidy, tidyBonds))
         const result = await reorganiseLayout(tidy, tidyBonds, { ...presetOptions('balanced'), steps: 100 })
-        expect(result.after.complexity.total).toBeLessThanOrEqual(before.total + 1e-9)
+        expect(result.after.complexity.total).toBeLessThanOrEqual(result.before.complexity.total + 1e-9)
         if (!result.improved) {
             expect([...result.positions].map(([, p]) => [p.x, p.y])).toEqual(tidy.map(n => [n.x, n.y]))
         }
+    })
+})
+
+describe('lines and rectangles', () => {
+    test('columns and rows are counted for each kind of node apart', () => {
+        const nodes = [node('a', 0, 0, ['c']), node('b', 0, 100, ['c']), node('r1', 50, 0, ['c'], 'reaction'),
+                       node('r2', 50, 100, ['c'], 'reaction'), node('r3', 0.2, 50, ['c'], 'reaction')]
+        // stores: one column, two rows; reactions: two columns (0.2 and 50), three rows
+        expect(lineCount(nodes)).toEqual({ columns: 3, rows: 5 })
+        expect(lineCount(nodes, new Set([4]))).toEqual({ columns: 2, rows: 4 })
+    })
+
+    test('three regions meet at a corner, and two steps joining all three sit apart across it', () => {
+        const nodes = [node('c1', 0, 0, ['c']), node('c2', 60, 0, ['c']), node('m1', 0, 200, ['m']), node('m2', 60, 200, ['m']),
+                       node('p1', 300, 100, ['p']), node('p2', 300, 160, ['p']),
+                       node('cm', 30, 100, ['c', 'm'], 'reaction'), node('cp', 150, 50, ['c', 'p'], 'reaction'),
+                       node('x1', 150, 100, ['c', 'm', 'p'], 'reaction'), node('x2', 160, 110, ['c', 'm', 'p'], 'reaction')]
+        const plan = planRectangles(nodes, 60, new Map())!
+        const t1 = plan.targets.get(8)!, t2 = plan.targets.get(9)!
+        // points, apart by more than a node
+        expect(t1.x0).toBe(t1.x1)
+        expect(t1.y0).toBe(t1.y1)
+        expect(Math.hypot(t1.x0 - t2.x0, t1.y0 - t2.y0)).toBeGreaterThan(30)
+        // each next to all three rectangles
+        for (const t of [t1, t2]) {
+            for (const l of ['c', 'm', 'p']) {
+                const r = plan.rects.get(l)!
+                expect(Math.max(r.x0 - t.x0, t.x0 - r.x1, 0) + Math.max(r.y0 - t.y0, t.y0 - r.y1, 0)).toBeLessThan(60)
+            }
+        }
+        // the rectangles don't overlap
+        const rs = [...plan.rects.values()]
+        for (let i = 0; i < rs.length; i++) for (let j = i + 1; j < rs.length; j++) {
+            const a = rs[i]!, b = rs[j]!
+            expect(Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) <= 1e-6 || Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) <= 1e-6).toBe(true)
+        }
+    })
+
+    test('regions that can\'t be sliced into rectangles are left free-form', () => {
+        // six regions: more than a slicing is tried for
+        const labels = ['a', 'b', 'c', 'd', 'e', 'f']
+        const nodes = labels.map((l, k) => node(l, 100 * k, 0, [l]))
+        expect(planRectangles(nodes, 60, new Map())).toBeUndefined()
     })
 })

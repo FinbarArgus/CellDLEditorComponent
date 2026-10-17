@@ -2,7 +2,8 @@
 import { describe, expect, test } from 'bun:test'
 
 import {
-    bondCrossings, boundaryShape, connectRegions, type LayoutNode, regionComponents, regionGrid, regionLoops, regionPoints
+    bondCrossings, boundaryShape, complexityOptions, connectRegions, layoutComplexity, type LayoutNode, rectangularRegions,
+    regionComponents, regionGrid, regionLoops, regionPoints
 } from '../../src/plugins/bondgraph/regions'
 
 const node = (id: string, x: number, y: number, labels: string[]): LayoutNode => ({ id, x, y, w: 30, h: 20, labels })
@@ -27,6 +28,40 @@ describe('regions', () => {
         const { turning, length } = boundaryShape(grid)
         expect(turning).toBeLessThan(1.5)           // nearly straight
         expect(length).toBeGreaterThan(100)
+    })
+
+    test('separate regions are drawn as rectangles meeting at the step between them; interleaved ones are not', () => {
+        const nodes = [node('a1', 0, 0, ['c']), node('a2', 0, 60, ['c']), node('r', 100, 30, ['c', 'm']),
+                       node('b1', 200, 0, ['m']), node('b2', 200, 60, ['m'])]
+        const rects = rectangularRegions(nodes, 10)!
+        const c = rects.get('c')!, m = rects.get('m')!
+        expect(c.x1).toBeCloseTo(100, 6)            // they meet at the step
+        expect(m.x0).toBeCloseTo(100, 6)
+        for (const n of nodes) {
+            for (const l of n.labels) {
+                const r = rects.get(l)!
+                expect(n.x >= r.x0 && n.x <= r.x1 && n.y >= r.y0 && n.y <= r.y1).toBe(true)
+            }
+        }
+        const bonds = [{ a: 'a1', b: 'r' }, { a: 'a2', b: 'r' }, { a: 'r', b: 'b1' }, { a: 'r', b: 'b2' }]
+        const measured = layoutComplexity(nodes, bonds, { ...complexityOptions(nodes, bonds), rectangles: true })
+        expect(measured.rectangular).toBe(true)
+        expect(measured.turning).toBe(0)
+        // the padding only widens the outer edge: it never makes neighbouring regions overlap
+        const padded = rectangularRegions(nodes, 100)!
+        expect(padded.get('c')!.x1).toBeCloseTo(100, 6)
+        expect(padded.get('c')!.x0).toBeCloseTo(-115, 6)
+        const interleaved = [node('a1', 0, 0, ['c']), node('b1', 100, 0, ['m']), node('a2', 200, 0, ['c'])]
+        expect(rectangularRegions(interleaved, 10)).toBeUndefined()
+    })
+
+    test('two steps joining three regions side by side across their corner still give rectangles', () => {
+        // m above, p bottom left, c bottom right; the c nodes stop well short of the corner at (0, 100)
+        const nodes = [node('m1', -100, 0, ['m']), node('m2', 100, 0, ['m']), node('p1', -100, 200, ['p']),
+                       node('c1', 120, 200, ['c']), node('x1', -30, 100, ['c', 'm', 'p']), node('x2', 30, 100, ['c', 'm', 'p'])]
+        const rects = rectangularRegions(nodes, 20)!
+        expect([...rects.keys()]).toEqual(['c', 'm', 'p'])
+        expect(rects.get('m')!.y1).toBeLessThanOrEqual(rects.get('c')!.y0 + 1e-6)
     })
 
     test('interleaved nodes split a region, and a corridor joins the pieces when it splits nothing else', () => {

@@ -28,7 +28,7 @@ import { componentLibraryPlugin } from '#root/plugins'
 import type { BondgraphPlugin } from '#root/plugins/bondgraph'
 import {
     type Complexity, complexityOptions, connectRegions, type LayoutBond, type LayoutNode, layoutComplexity,
-    type Point2, regionComponents, regionGrid, regionLoops, sortedLabels
+    type Point2, rectangularRegions, regionComponents, regionGrid, regionLoops, sortedLabels
 } from '#root/plugins/bondgraph/regions'
 import { type LayoutOptions, presetOptions, reorganiseLayout } from '#root/plugins/bondgraph/layout'
 import { SVG_URI } from '#root/utils/svgUtils'
@@ -97,6 +97,7 @@ function regionLayer(): SVGGElement|null {
 export interface RegionSummary {
     regions: string[]
     subspaces: Map<string, number>          // connected pieces of each region
+    rectangular?: boolean                   // drawn as rectangles
 }
 
 let showing = true
@@ -111,14 +112,53 @@ export function drawRegions(show: boolean = showing): RegionSummary {
     const { nodes, bonds } = diagramLayout()
     const regions = sortedLabels(nodes)
     if (!show || regions.length === 0) return summary
-    const { sigma } = complexityOptions(nodes, bonds)
+    const { sigma, bondLength } = complexityOptions(nodes, bonds)
+    const label = (text: string, x: number, y: number, colour: string, anchor: string) => {
+        const t = document.createElementNS(SVG_URI, 'text')
+        t.setAttribute('x', String(x))
+        t.setAttribute('y', String(y))
+        t.setAttribute('fill', colour)
+        t.setAttribute('fill-opacity', '0.75')
+        t.setAttribute('font-size', '18')
+        t.setAttribute('font-weight', '600')
+        t.setAttribute('text-anchor', anchor)
+        t.setAttribute('font-family', 'system-ui, sans-serif')
+        t.textContent = text
+        t.dataset.region = text
+        layer.append(t)
+    }
+    // rectangles when the regions can be drawn so, else free-form
+    const rects = rectangularRegions(nodes, 0.3 * bondLength)
+    if (rects) {
+        summary.regions = regions
+        summary.subspaces = new Map(regions.map(l => [l, 1]))
+        summary.rectangular = true
+        regions.forEach((name, k) => {
+            const colour = REGION_COLOURS[k % REGION_COLOURS.length]!
+            const r = rects.get(name)!
+            const rect = document.createElementNS(SVG_URI, 'rect')
+            rect.setAttribute('x', r.x0.toFixed(1))
+            rect.setAttribute('y', r.y0.toFixed(1))
+            rect.setAttribute('width', (r.x1 - r.x0).toFixed(1))
+            rect.setAttribute('height', (r.y1 - r.y0).toFixed(1))
+            rect.setAttribute('fill', colour)
+            rect.setAttribute('fill-opacity', '0.13')
+            rect.setAttribute('stroke', colour)
+            rect.setAttribute('stroke-opacity', '0.45')
+            rect.setAttribute('stroke-width', '1.2')
+            rect.dataset.region = name
+            layer.append(rect)
+            label(name, r.x0 + 8, r.y0 + 22, colour, 'start')
+        })
+        return summary
+    }
     const grid = regionGrid(nodes, bonds, { sigma, cell: sigma / 4 })
     connectRegions(grid)
     summary.regions = regions
     summary.subspaces = regionComponents(grid)
-    regions.forEach((label, k) => {
+    regions.forEach((name, k) => {
         const colour = REGION_COLOURS[k % REGION_COLOURS.length]!
-        const loops = regionLoops(grid, label, { blur: 2, smooth: 2 })
+        const loops = regionLoops(grid, name, { blur: 2, smooth: 2 })
         const d = loops.map(loop => `M${loop.points.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' L')} Z`).join(' ')
         const path = document.createElementNS(SVG_URI, 'path')
         path.setAttribute('d', d)
@@ -128,11 +168,11 @@ export function drawRegions(show: boolean = showing): RegionSummary {
         path.setAttribute('stroke', colour)
         path.setAttribute('stroke-opacity', '0.45')
         path.setAttribute('stroke-width', '1.2')
-        path.dataset.region = label
+        path.dataset.region = name
         layer.append(path)
         // its name, in the cell of the region nearest its middle
         let sx = 0, sy = 0, n = 0
-        const l = grid.labels.indexOf(label)
+        const l = grid.labels.indexOf(name)
         for (let k2 = 0; k2 < grid.owner.length; k2++) {
             if (grid.owner[k2] !== l) continue
             sx += k2 % grid.cols; sy += Math.floor(k2 / grid.cols); n++
@@ -145,18 +185,7 @@ export function drawRegions(show: boolean = showing): RegionSummary {
             if (d2 < bestD) { bestD = d2; best = k2 }
         }
         if (best < 0) return
-        const text = document.createElementNS(SVG_URI, 'text')
-        text.setAttribute('x', String(grid.x0 + (best % grid.cols) * grid.cell))
-        text.setAttribute('y', String(grid.y0 + Math.floor(best / grid.cols) * grid.cell))
-        text.setAttribute('fill', colour)
-        text.setAttribute('fill-opacity', '0.75')
-        text.setAttribute('font-size', '18')
-        text.setAttribute('font-weight', '600')
-        text.setAttribute('text-anchor', 'middle')
-        text.setAttribute('font-family', 'system-ui, sans-serif')
-        text.textContent = label
-        text.dataset.region = label
-        layer.append(text)
+        label(name, grid.x0 + (best % grid.cols) * grid.cell, grid.y0 + Math.floor(best / grid.cols) * grid.cell, colour, 'middle')
     })
     return summary
 }
@@ -237,7 +266,7 @@ function moveTo(objects: Map<string, CellDLObject>, positions: Map<string, Point
 export function currentComplexity(): Complexity|undefined {
     const { nodes, bonds } = diagramLayout()
     if (nodes.length === 0) return
-    return layoutComplexity(nodes, bonds, complexityOptions(nodes, bonds))
+    return layoutComplexity(nodes, bonds, { ...complexityOptions(nodes, bonds), rectangles: true })
 }
 
 /**

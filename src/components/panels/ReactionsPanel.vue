@@ -121,7 +121,8 @@ const progress = vue.ref(0)
 const layoutStatus = vue.ref('')
 const canUndo = vue.ref(false)
 
-function describe(subspaces: number, regions: number): string {
+function describe(subspaces: number, regions: number, rectangular?: boolean): string {
+    if (rectangular && regions > 1) return `the ${regions} regions as rectangles`
     return subspaces === regions ? `each of ${regions} region${regions === 1 ? '' : 's'} in one piece`
                                  : `${regions} regions in ${subspaces} pieces`
 }
@@ -137,7 +138,7 @@ async function reorganiseLayout() {
         const { before, after, rings } = result
         const kept = rings ? ` ${rings} cycle${rings === 1 ? '' : 's'} drawn as a circle.` : ''
         layoutStatus.value = after.total < before.total
-            ? `Complexity ${before.total.toFixed(0)} → ${after.total.toFixed(0)}: ${describe(after.subspaces, after.regions)}, `
+            ? `Complexity ${before.total.toFixed(0)} → ${after.total.toFixed(0)}: ${describe(after.subspaces, after.regions, after.rectangular)}, `
               + `${after.crossings} crossing bond${after.crossings === 1 ? '' : 's'} (were ${before.crossings}).${kept}`
             : `No simpler layout found (complexity ${before.total.toFixed(0)}).`
     } finally {

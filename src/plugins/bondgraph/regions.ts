@@ -92,6 +92,7 @@ export interface Complexity {
     stretch: number
     overlap: number
     moved: number
+    rectangular?: boolean   // the regions are rectangles (rectangularRegions)
 }
 
 export const WEIGHTS = {
@@ -102,7 +103,8 @@ export const WEIGHTS = {
     overlap: 20,
     moved: 0.02,
     circle: 30,             // per cycle drawn as a circle, times how far its nodes are from one (./layout.ts)
-    inside: 10              // per node inside a cycle's circle that isn't the cycle's (./layout.ts)
+    inside: 10,             // per node inside a cycle's circle that isn't the cycle's (./layout.ts)
+    align: 0                // per distinct column and row of a kind of node (./layout.ts, lineCount)
 }
 
 //==============================================================================
@@ -552,14 +554,103 @@ export interface ComplexityOptions {
     bondLength: number          // natural bond length
     gap: number                 // clearance between nodes
     start?: Map<string, Point2> // positions to stay near
+    rectangles?: boolean        // regions that can be rectangles are measured as such (rectangularRegions)
+}
+
+//==============================================================================
+
+export interface Rect {
+    x0: number
+    y0: number
+    x1: number
+    y1: number
+}
+
+/**
+ * Rectangular regions for the nodes as placed, when there are such: each region's rectangle holds its nodes and
+ * reaches each of its boundary steps, the rectangles don't overlap, and none holds another
+ * region's node. They are then grown until they meet each other or the edge of the regions' common box. Undefined
+ * when the regions can't be rectangles (they interleave): draw them free-form (regionGrid) instead.
+ */
+export function rectangularRegions(nodes: LayoutNode[], pad: number): Map<string, Rect>|undefined {
+    const labels = sortedLabels(nodes)
+    if (labels.length === 0) return undefined
+    const rects = new Map<string, Rect>()
+    for (const label of labels) {
+        const own = nodes.filter(n => n.labels.length === 1 && n.labels[0] === label)
+        if (own.length === 0) return undefined
+        rects.set(label, {
+            x0: Math.min(...own.map(n => n.x - n.w / 2)), y0: Math.min(...own.map(n => n.y - n.h / 2)),
+            x1: Math.max(...own.map(n => n.x + n.w / 2)), y1: Math.max(...own.map(n => n.y + n.h / 2))
+        })
+    }
+    // a step between two regions is on the border of each; one joining three is near their common corner
+    for (const n of nodes) {
+        if (n.labels.length !== 2) continue
+        for (const label of n.labels) {
+            const r = rects.get(label)!
+            r.x0 = Math.min(r.x0, n.x); r.y0 = Math.min(r.y0, n.y); r.x1 = Math.max(r.x1, n.x); r.y1 = Math.max(r.y1, n.y)
+        }
+    }
+    const overlap = (a: Rect, b: Rect) => Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) > 1e-6
+                                          && Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) > 1e-6
+    const all = [...rects.entries()]
+    for (let i = 0; i < all.length; i++) {
+        for (let j = i + 1; j < all.length; j++) if (overlap(all[i]![1], all[j]![1])) return undefined
+    }
+    for (const n of nodes) {
+        if (n.labels.length !== 1) continue
+        for (const [label, r] of all) {
+            if (label !== n.labels[0] && n.x > r.x0 && n.x < r.x1 && n.y > r.y0 && n.y < r.y1) return undefined
+        }
+    }
+    // grow each side to meet its neighbour half way, or the common box's edge (`pad` beyond the nodes)
+    const box = { x0: Math.min(...all.map(([, r]) => r.x0)) - pad, y0: Math.min(...all.map(([, r]) => r.y0)) - pad,
+                  x1: Math.max(...all.map(([, r]) => r.x1)) + pad, y1: Math.max(...all.map(([, r]) => r.y1)) + pad }
+    const across = (a: Rect, b: Rect, axis: 'x'|'y') => axis === 'x'
+        ? Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) > 1e-6 : Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) > 1e-6
+    for (const axis of ['x', 'y'] as const) {
+        const lo = axis === 'x' ? 'x0' : 'y0', hi = axis === 'x' ? 'x1' : 'y1'
+        const targets = all.map(([, r]) => {
+            let up = box[hi], down = box[lo]
+            for (const [, o] of all) {
+                if (o === r || !across(r, o, axis)) continue
+                if (o[lo] >= r[hi] - 1e-6) up = Math.min(up, (r[hi] + o[lo]) / 2)
+                if (o[hi] <= r[lo] + 1e-6) down = Math.max(down, (r[lo] + o[hi]) / 2)
+            }
+            return { up, down }
+        })
+        all.forEach(([, r], k) => { r[hi] = targets[k]!.up; r[lo] = targets[k]!.down })
+    }
+    // a step joining three regions is within a node (and the padding) of each of their rectangles, as grown: such
+    // steps sit side by side across the corner where the three meet
+    for (const n of nodes) {
+        if (n.labels.length < 3) continue
+        const reach = Math.max(n.w, n.h) + pad
+        for (const label of n.labels) {
+            const r = rects.get(label)!
+            if (Math.max(r.x0 - n.x, n.x - r.x1, 0) > reach || Math.max(r.y0 - n.y, n.y - r.y1, 0) > reach) return undefined
+        }
+    }
+    return rects
 }
 
 export function layoutComplexity(nodes: LayoutNode[], bonds: LayoutBond[], options: ComplexityOptions): Complexity {
+    // rectangles are one piece each, with straight borders
+    if (options.rectangles && rectangularRegions(nodes, 0.3 * options.bondLength)) {
+        const regions = sortedLabels(nodes).length
+        return finishComplexity(nodes, bonds, options, regions, regions, 0, 0, true)
+    }
     const grid = regionGrid(nodes, bonds, { sigma: options.sigma, cell: options.cell })
     const counts = regionComponents(grid)
     const subspaces = [...counts.values()].reduce((s, c) => s + c, 0)
     const regions = grid.labels.length
     const { turning, length } = boundaryShape(grid, { blur: 1, smooth: 1 })
+    return finishComplexity(nodes, bonds, options, subspaces, regions, turning, length, false)
+}
+
+function finishComplexity(nodes: LayoutNode[], bonds: LayoutBond[], options: ComplexityOptions, subspaces: number,
+                          regions: number, turning: number, length: number, rectangular: boolean): Complexity {
     const crossings = bondCrossings(nodes, bonds)
     const byId = new Map(nodes.map(n => [n.id, n]))
     let stretch = 0
@@ -587,7 +678,7 @@ export function layoutComplexity(nodes: LayoutNode[], bonds: LayoutBond[], optio
     }
     const total = 2 * Math.PI * WEIGHTS.split * (subspaces - regions) + turning + WEIGHTS.length * length / options.sigma
                 + WEIGHTS.crossing * crossings + WEIGHTS.stretch * stretch + WEIGHTS.overlap * overlap + WEIGHTS.moved * moved
-    return { total, subspaces, regions, turning, length, crossings, stretch, overlap, moved }
+    return { total, subspaces, regions, turning, length, crossings, stretch, overlap, moved, rectangular }
 }
 
 //==============================================================================
