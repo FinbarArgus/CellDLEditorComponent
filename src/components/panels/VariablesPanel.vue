@@ -6,7 +6,9 @@
             p.hint
                 | How the generated CellML names this model's variables. Choose a convention, change its patterns,
                 | or name single variables; patterns use #[code {species}], #[code {location}], #[code {name}],
-                | #[code {element}], #[code {label}] and #[code {var}]. Saved with the document.
+                | #[code {element}], #[code {label}] and #[code {var}]. Saved with the document. The mapping saves as
+                | libcuflynx's variable mapping (for #[code cuflynx-methods-latex]) with a #[code bondgraph] column; a
+                | mapping loaded back names each variable by its row's #[code variable_name].
             p(v-if="elements.length === 0") This diagram has no bond elements yet.
             template(v-else)
                 label.field(for="naming-convention") Convention
@@ -41,6 +43,10 @@
                 .actions
                     button.apply(type="button" :disabled="!changed" @click="apply") Apply
                     button(type="button" :disabled="!changed" @click="refresh") Revert
+                .actions
+                    button.save-mapping(type="button" @click="saveMapping") Save mapping CSV
+                    button.load-mapping(type="button" @click="mappingFile?.click()") Load mapping CSV…
+                    input.mapping-file(ref="mappingFile" type="file" accept=".csv,text/csv" hidden @change="loadMapping")
                 p.status {{ status }}
 </template>
 
@@ -53,6 +59,8 @@ import {
     bondgraphName, DOMAINS, ELEMENT_CLASSES, elementNames, matchingPreset, NAMING_PRESETS, type NameOverrides, type NamingElement,
     type NamingRule, previewNames
 } from '#root/plugins/bondgraph/naming'
+
+import { mappingCsv, mappingRows, readMapping } from '#root/plugins/bondgraph/mapping'
 
 import { notifyChanges } from '#editor/editor'
 
@@ -156,6 +164,37 @@ function describe(): string {
     return renamed === 0 ? 'The CellML uses the bond graph\'s names.'
          : `${renamed} variable${renamed === 1 ? '' : 's'} named differently from the bond graph. `
            + 'bg2cellml uses these names when it writes the CellML (bgtool --list-variables lists them).'
+}
+
+const mappingFile = vue.ref<HTMLInputElement|null>(null)
+
+// the mapping as the names stand (with any pending edits), downloaded as a CSV
+function saveMapping() {
+    const csv = mappingCsv(mappingRows(elements.value, rules.value, overrides.value))
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    link.download = 'variable_mapping.csv'
+    link.click()
+    URL.revokeObjectURL(link.href)
+    status.value = `Saved the mapping of ${elements.value.reduce((n, e) => n + e.variables.length, 0)} variables.`
+}
+
+// a mapping's names, as pending edits to apply or revert
+async function loadMapping(event: Event) {
+    const input = event.target as HTMLInputElement
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    try {
+        const read = readMapping(await file.text(), elements.value, rules.value, overrides.value)
+        overrides.value = read.overrides
+        changed.value = true
+        status.value = `${read.matched} variable${read.matched === 1 ? '' : 's'} from ${file.name}`
+                     + (read.unmatched ? `; ${read.unmatched} row${read.unmatched === 1 ? '' : 's'} named no variable of this model` : '')
+                     + '. Apply to keep the names.'
+    } catch (error) {
+        status.value = `${file.name}: ${(error as Error).message}`
+    }
 }
 
 function refresh() {
