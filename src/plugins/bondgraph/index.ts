@@ -608,6 +608,22 @@ export class BondgraphPlugin implements PluginInterface {
         return this.#diagramGraph().species
     }
 
+    /**
+     * The diagram's regions (./regions.ts): each store's and source's location, each step's species' locations
+     * (several for a step between compartments), and the bonds between nodes.
+     */
+    regionLayout(): { regions: Map<string, string[]>, bonds: { a: string, b: string, id?: string, count: number }[] } {
+        const { bonds, nodes, steps, species } = this.#diagramGraph()
+        const regions = new Map<string, string[]>()
+        for (const n of species) {
+            if (n.location) regions.set(n.id, [n.location])
+        }
+        for (const [node, isResistance] of steps) {
+            regions.set(node, stepEquation(node, isResistance, bonds, nodes).regions)
+        }
+        return { regions, bonds: bonds.map(b => ({ a: b.source, b: b.target, id: b.id, count: b.count })) }
+    }
+
     /** The element type of a component (its template's, else its base component's). */
     elementType(celldlObject: CellDLObject): string|undefined {
         const pluginData = <PluginData>celldlObject.pluginData(this.id)

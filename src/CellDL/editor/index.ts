@@ -347,6 +347,9 @@ export class CellDLEditor {
         // Initialise alignment guides and grid
         editGuides.newDiagram(celldlDiagram, DEFAULT_VIEW_STATE)
 
+        // e.g. for its regions to be drawn
+        document.dispatchEvent(new CustomEvent('diagram-opened'))
+
         // Show the diagram in the editor's window
         if (this.#container) {
             this.#container.appendChild(this.#svgDiagram!)

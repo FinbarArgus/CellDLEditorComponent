@@ -105,19 +105,21 @@ const scenario = (src: string) => `(async () => {
     const rows = () => [...document.querySelectorAll('.reactions-step .equation')]
     check('the panel shows every step', rows().length === steps().length && rows().length > 0,
           rows().length + ' rows, ' + steps().length + ' steps')
-    const row = rows()[0]
-    const shown = steps()[0]
-    if (row && shown && shown.substrates.length) {
+    const shown = steps().find(e => e.substrates.length)
+    const rowOf = eq => rows().find(r => r.getAttribute('aria-label') === 'Equation of ' + eq.name)
+    const row = shown && rowOf(shown)
+    if (row && shown) {
         const typed = row.value.replace(term(shown.substrates[0]), term({ ...shown.substrates[0], count: 3 * shown.substrates[0].count }))
         row.value = typed
         row.dispatchEvent(new Event('input'))
         row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
         await wait(500)
-        check('typing an equation edits the bond graph', text(shown.id) === equationText(steps()[0]) && text(shown.id) !== equationText(shown)
-              && steps()[0].substrates[0].count === 3 * shown.substrates[0].count, text(shown.id))
+        const edited = steps().find(e => e.id === shown.id)
+        check('typing an equation edits the bond graph', text(shown.id) !== equationText(shown)
+              && edited.substrates[0].count === 3 * shown.substrates[0].count, text(shown.id))
         await applyEquation(shown.id, equationText(shown))
         await wait(300)
-        check('the panel follows the diagram', rows()[0].value === equationText(shown), rows()[0].value)
+        check('the panel follows the diagram', rowOf(shown).value === equationText(shown), rowOf(shown).value)
     }
     const step = steps().find(e => e.kind === 'reaction' && e.substrates.length && e.products.length)
     const original = text(step.id)
@@ -156,6 +158,50 @@ const scenario = (src: string) => `(async () => {
     const hovers = steps().filter(e => componentLibraryPlugin.hoverText(diagram.objectById(e.id.split('#').pop()))
                                        !== equationText(e))
     check('hover text is each reaction\\'s equation', hovers.length === 0, hovers.map(e => e.name))
+
+    // regions: drawn behind the diagram, one per location; the panel's groups; reorganising keeps bonds attached
+    const regions = await import('${src}/CellDL/editor/regions.ts')
+    const drawn = regions.drawRegions()
+    const locations = [...new Set(regions.diagramLayout().nodes.flatMap(n => n.labels))].sort()
+    const shaded = [...document.querySelectorAll('#celldl-region-layer path')].map(p => p.dataset.region).sort()
+    check('a shaded region per location', JSON.stringify(shaded) === JSON.stringify(locations) && locations.length > 0,
+          shaded)
+    const keys = new Set(steps().map(e => e.regions.join('|')))
+    check('the panel groups steps by region', document.querySelectorAll('.region-heading').length === keys.size,
+          [...document.querySelectorAll('.region-heading')].map(h => h.textContent))
+    const attached = () => {
+        const loose = []
+        for (const b of regions.diagramLayout().bonds) {
+            const bond = b.id && diagram.objectById(b.id.split('#').pop())
+            const path = bond?.celldlSvgElement?.svgElement
+            const line = path instanceof SVGPathElement ? path : path?.querySelector('path')
+            if (!line) continue
+            const ends = [line.getPointAtLength(0), line.getPointAtLength(line.getTotalLength())]
+            const near = (id, p) => {
+                const s = diagram.objectById(id.split('#').pop()).celldlSvgElement
+                return Math.abs(p.x - s.centroid.x) <= s.width / 2 + 15 && Math.abs(p.y - s.centroid.y) <= s.height / 2 + 15
+            }
+            if (!(near(b.a, ends[0]) || near(b.a, ends[1])) || !(near(b.b, ends[0]) || near(b.b, ends[1]))) loose.push(b.id)
+        }
+        return loose
+    }
+    const where = () => regions.diagramLayout().nodes.map(n => [n.id, Math.round(n.x), Math.round(n.y)].join())
+    const placed = where()
+    const result = await regions.reorganiseDiagram(undefined, { forceSteps: 150, steps: 600 })
+    check('reorganising lowers the complexity, or leaves the layout', result.after.total <= result.before.total
+          && (result.after.total < result.before.total) === (JSON.stringify(where()) !== JSON.stringify(placed)),
+          Math.round(result.before.total) + ' -> ' + Math.round(result.after.total) + ', '
+          + result.before.subspaces + ' -> ' + result.after.subspaces + ' pieces of ' + result.after.regions + ' regions')
+    check('bonds stay attached to their nodes', attached().length === 0, attached().slice(0, 3))
+    const counted = regions.diagramLayout().bonds.filter(b => b.count > 1).length
+    check('bond counts are redrawn', regions.drawBondCounts() === counted, counted)
+    if (regions.canUndoReorganise()) {
+        regions.undoReorganise()
+        await wait(300)
+        const differ = where().filter((p, k) => p !== placed[k])
+        check('undo reorganise puts the nodes back', differ.length === 0,
+              differ.slice(0, 3).map(p => p + ' was ' + placed[where().indexOf(p)]))
+    }
     return { checks, document: await diagram.serialise() }
 })()`
 
