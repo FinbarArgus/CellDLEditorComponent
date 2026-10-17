@@ -202,7 +202,26 @@ const scenario = (src: string) => `(async () => {
         check('undo reorganise puts the nodes back', differ.length === 0,
               differ.slice(0, 3).map(p => p + ' was ' + placed[where().indexOf(p)]))
     }
-    return { checks, document: await diagram.serialise() }
+    // the Variables panel: choose a convention and apply it; it is saved with the document
+    const naming = await import('${src}/plugins/bondgraph/naming.ts')
+    document.getElementById('variables-panel').click()
+    await wait(500)
+    const shownElements = document.querySelectorAll('details.element').length
+    check('the Variables panel lists every bond element', shownElements === plugin.namingElements().length
+          && shownElements > 0, shownElements)
+    const convention = document.getElementById('naming-convention')
+    convention.value = 'chemistry'
+    convention.dispatchEvent(new Event('change'))
+    await wait(200)
+    document.querySelector('.actions button.apply').click()
+    await wait(300)
+    const saved = plugin.naming()
+    const chemistry = naming.NAMING_PRESETS.find(p => p.id === 'chemistry')
+    check('the chosen convention is saved with the document', naming.matchingPreset(saved.rules)?.id === 'chemistry'
+          && saved.rules.length === chemistry.rules.length, saved.rules.length)
+    const preview = naming.previewNames(plugin.namingElements(), saved.rules, saved.overrides)
+    const names = Object.fromEntries([...preview].map(([key, name]) => [key.split('#').pop(), name]))
+    return { checks, document: await diagram.serialise(), names }
 })()`
 
 let failed = false
@@ -217,7 +236,7 @@ try {
         console.error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text)
         failed = true
     } else {
-        const { checks, document: edited } = result.result.value
+        const { checks, document: edited, names } = result.result.value
         for (const c of checks) {
             console.log(`${c.ok ? 'ok  ' : 'FAIL'} ${c.what}${c.detail !== undefined ? `: ${JSON.stringify(c.detail)}` : ''}`)
             failed ||= !c.ok
@@ -233,6 +252,11 @@ try {
         if (out) {
             writeFileSync(out, edited)
             console.log(`edited document: ${out}`)
+            if (names) {
+                // the Variables panel's names, element|variable -> name, to compare with bgtool --list-variables
+                writeFileSync(`${out}.names.json`, JSON.stringify(names, null, 1))
+                console.log(`its variable names: ${out}.names.json`)
+            }
         }
     }
     socket.close()

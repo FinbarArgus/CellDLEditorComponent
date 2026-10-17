@@ -62,6 +62,7 @@ import type { PopoverEventData, ViewState } from '#root/utils/editor-types'
 
 import PropertiesPanel from './panels/PropertiesPanel.vue'
 import ReactionsPanel from './panels/ReactionsPanel.vue'
+import VariablesPanel from './panels/VariablesPanel.vue'
 import StylingPanel from './panels/StylingPanel.vue'
 
 import EditorToolbar from './toolbar/EditorToolbar.vue'
@@ -279,6 +280,12 @@ const panelButtons = vue.ref<EditorToolButton[]>([
         prompt: 'Reactions',
         icon: 'lucide-FlaskConical',
         panel: vue.markRaw(ReactionsPanel)
+    },
+    {
+        toolId: PANEL_ID.VARIABLES_PANEL,
+        prompt: 'Variables',
+        icon: 'lucide-Tags',
+        panel: vue.markRaw(VariablesPanel)
     }
 ])
 
@@ -341,6 +348,10 @@ vue.watch(
             const options = command.options
             if (options.action === 'clean') {
                 undoRedo.clean()
+            } else if (options.action === 'map-variables') {
+                // open the Variables panel
+                const button = document.getElementById(PANEL_ID.VARIABLES_PANEL)
+                if (button && !button.classList.contains('active')) button.click()
             }
         } else if (props.editorCommand?.command === 'set-state') {
             const command = props.editorCommand as EditorSetStateCommand

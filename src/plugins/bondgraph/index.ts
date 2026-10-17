@@ -86,6 +86,7 @@ import {
 } from './definitions'
 import { type BondInfo, equationText, type NodeInfo, type SpeciesNode, type StepEquation, stepEquation } from './equations'
 import { elementTemplatesQuery, styleOverrides, templateStyle } from './laws'
+import { ELEMENT_CLASSES, type NameOverrides, type NamingElement, type NamingRule } from './naming'
 import type {
     BGComponentLibrary,
     BGLibraryComponentTemplate,
@@ -606,6 +607,99 @@ export class BondgraphPlugin implements PluginInterface {
     /** The diagram's species stores and sources. */
     speciesNodes(): SpeciesNode[] {
         return this.#diagramGraph().species
+    }
+
+    /**
+     * The diagram's bond elements with the variables bg2cellml gives them (./naming.ts): its flow and potential
+     * (a reaction's u_f and u_r), its template's parameters and variables, then its own quantity.
+     */
+    namingElements(): NamingElement[] {
+        const store = this.#documentStore
+        if (!store) return []
+        const prefix = `${this.#currentDocumentUri}#`
+        const classes = ELEMENT_CLASSES.map(c => ({ uri: c.uri, types: this.#subclassesOf(c.uri) }))
+        const elements = new Map<string, NamingElement>()
+        for (const r of store.query(`${SPARQL_PREFIXES}
+            SELECT ?node ?type ?symbol ?species ?location WHERE {
+                ?node a ?type .
+                OPTIONAL { ?node bgf:hasSymbol ?symbol }
+                OPTIONAL { ?node bgf:hasSpecies ?species }
+                OPTIONAL { ?node bgf:hasLocation ?location }
+            }`) as Map<string, $rdf.Term>[]) {
+            const node = r.get('node')!.value
+            const template = this.#elementTemplates.get(r.get('type')!.value)
+            if (!node.startsWith(prefix) || !template || elements.has(node)) continue
+            const elementClass = classes.find(c => c.types.has(template.type))?.uri
+            const domain = this.#physicalDomains.get(template.domain)
+            const flow = domain?.flow.name ?? 'v', potential = domain?.potential.name ?? 'u'
+            const ports = elementClass === BGF.uri('Reaction').value ? [flow, `${potential}_f`, `${potential}_r`]
+                        : [flow, potential]
+            const intrinsic = template.value?.name
+            const variables = [...ports, ...template.parameters.keys(), ...template.variables.keys()]
+                              .filter(v => v !== intrinsic)
+            if (intrinsic) variables.push(intrinsic)
+            elements.set(node, {
+                id: node, identifier: node.slice(prefix.length), elementClass, domain: template.domain,
+                label: r.get('symbol')?.value, species: r.get('species')?.value, location: r.get('location')?.value,
+                variables: [...new Set(variables)], intrinsic
+            })
+        }
+        return [...elements.values()]
+    }
+
+    /** The document's naming rules and explicit names (bgf:hasNamingRule, bgf:hasVariableName). */
+    naming(): { rules: NamingRule[], overrides: NameOverrides } {
+        const store = this.#documentStore
+        const rules: NamingRule[] = [], overrides: NameOverrides = new Map()
+        if (!store) return { rules, overrides }
+        for (const r of store.query(`${SPARQL_PREFIXES}
+            SELECT ?variable ?pattern ?class ?domain WHERE {
+                <${this.#currentDocumentUri}> bgf:hasNamingRule ?rule .
+                ?rule bgf:forVariable ?variable ; bgf:namePattern ?pattern .
+                OPTIONAL { ?rule bgf:forElementClass ?class }
+                OPTIONAL { ?rule bgf:forDomain ?domain }
+            }`) as Map<string, $rdf.Term>[]) {
+            rules.push({ variable: r.get('variable')!.value, pattern: r.get('pattern')!.value,
+                         elementClass: r.get('class')?.value, domain: r.get('domain')?.value })
+        }
+        for (const r of store.query(`${SPARQL_PREFIXES}
+            SELECT ?element ?variable ?name WHERE {
+                ?element bgf:hasVariableName ?given .
+                ?given bgf:forVariable ?variable ; bgf:cellmlName ?name .
+            }`) as Map<string, $rdf.Term>[]) {
+            overrides.set(`${r.get('element')!.value}|${r.get('variable')!.value}`, r.get('name')!.value)
+        }
+        return { rules, overrides }
+    }
+
+    /** Replace the document's naming rules and explicit names; they are saved with it. */
+    setNaming(rules: NamingRule[], overrides: NameOverrides) {
+        const store = this.#documentStore
+        if (!store) return
+        const literal = (s: string) => JSON.stringify(s)         // a quoted, escaped Turtle string
+        store.update(`${SPARQL_PREFIXES}
+            DELETE WHERE { <${this.#currentDocumentUri}> bgf:hasNamingRule ?rule . ?rule ?p ?o }`)
+        store.update(`${SPARQL_PREFIXES}
+            DELETE WHERE { ?element bgf:hasVariableName ?given . ?given ?p ?o }`)
+        const statements: string[] = []
+        rules.forEach((rule, k) => {
+            statements.push(`<${this.#currentDocumentUri}> bgf:hasNamingRule _:rule${k} .`,
+                            `_:rule${k} bgf:forVariable ${literal(rule.variable)} ; bgf:namePattern ${literal(rule.pattern)} .`)
+            if (rule.elementClass) statements.push(`_:rule${k} bgf:forElementClass <${rule.elementClass}> .`)
+            if (rule.domain) statements.push(`_:rule${k} bgf:forDomain <${rule.domain}> .`)
+        })
+        let k = 0
+        for (const [key, name] of overrides) {
+            if (name.trim() === '') continue
+            const [element, variable] = key.split('|')
+            statements.push(`<${element}> bgf:hasVariableName _:name${k} .`,
+                            `_:name${k} bgf:forVariable ${literal(variable!)} ; bgf:cellmlName ${literal(name.trim())} .`)
+            k += 1
+        }
+        if (statements.length) {
+            store.update(`${SPARQL_PREFIXES}
+                INSERT DATA { ${statements.join('\n')} }`)
+        }
     }
 
     /**
