@@ -135,9 +135,28 @@ describe('lines and rectangles', () => {
     test('columns and rows are counted for each kind of node apart', () => {
         const nodes = [node('a', 0, 0, ['c']), node('b', 0, 100, ['c']), node('r1', 50, 0, ['c'], 'reaction'),
                        node('r2', 50, 100, ['c'], 'reaction'), node('r3', 0.2, 50, ['c'], 'reaction')]
-        // stores: one column, two rows; reactions: two columns (0.2 and 50), three rows
-        expect(lineCount(nodes)).toEqual({ columns: 3, rows: 5 })
-        expect(lineCount(nodes, new Set([4]))).toEqual({ columns: 2, rows: 4 })
+        // stores: one column, two rows; reactions: two columns (0.2 and 50), three rows; every node: x 0 (0.2 within
+        // half a unit) and 50, y 0, 50 and 100
+        expect(lineCount(nodes)).toEqual({ columns: 3, rows: 5, allColumns: 2, allRows: 3 })
+        expect(lineCount(nodes, new Set([4]))).toEqual({ columns: 2, rows: 4, allColumns: 2, allRows: 3 })
+    })
+
+    test('side compounds of a cycle line up, and only the circle\'s own nodes are left out of the count', async () => {
+        const { nodes, bonds } = scatteredCycle()
+        // a side compound on each reaction of the cycle, which moves with the cycle as one body
+        for (const [k, r] of ['R1', 'R2', 'R3', 'R4'].entries()) {
+            nodes.push(node(`S${k}`, 400 + 37 * k, 23 * k * k, ['c'], 'source'))
+            bonds.push({ a: r, b: `S${k}` })
+        }
+        const result = await reorganiseLayout(nodes, bonds, { ...presetOptions('aligned'), steps: 600 })
+        const moved = nodes.map(n => ({ ...n, ...result.positions.get(n.id) }))
+        const circle = new Set(result.cycles.flat().map(id => nodes.findIndex(n => n.id === id)))
+        expect(circle.size).toBe(8)
+        const lines = lineCount(moved, circle)
+        expect([result.after.columns, result.after.rows]).toEqual([lines.columns, lines.rows])
+        // the four side compounds take fewer than four columns plus four rows
+        const sources = moved.filter(n => n.kind === 'source')
+        expect(lineCount(sources).columns + lineCount(sources).rows).toBeLessThan(8)
     })
 
     test('three regions meet at a corner, and two steps joining all three sit apart across it', () => {

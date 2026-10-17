@@ -282,8 +282,10 @@ export function circularity(nodes: LayoutNode[], cycle: number[]): number {
 
 export interface LayoutMeasures {
     complexity: Complexity
-    columns: number             // distinct x of the nodes of each kind, summed over kinds (a cycle's left out)
+    columns: number             // distinct x of the nodes of each kind, summed over kinds (a circle's left out)
     rows: number                // the same for y
+    allColumns: number          // distinct x of every node, as the diagram shows them
+    allRows: number             // the same for y
     stress: number
     meanBond: number            // mean bond length, in natural bond lengths
     circularity: number         // mean over the cycles drawn as circles (0: circles)
@@ -338,7 +340,7 @@ function measures(nodes: LayoutNode[], bonds: LayoutBond[], cycles: number[][], 
     const lengths = bonds.map(b => [byId.get(b.a), byId.get(b.b)]).filter(([a, c]) => a && c)
                          .map(([a, c]) => Math.hypot(a!.x - c!.x, a!.y - c!.y) / settings.bondLength)
     return {
-        complexity, columns: lines.columns, rows: lines.rows,
+        complexity, columns: lines.columns, rows: lines.rows, allColumns: lines.allColumns, allRows: lines.allRows,
         stress: normalisedStress(nodes, bonds, settings.bondLength),
         meanBond: lengths.length ? lengths.reduce((s, x) => s + x, 0) / lengths.length : 0,
         circularity: cycles.length ? cycles.reduce((s, c) => s + circularity(nodes, c), 0) / cycles.length : 0
@@ -349,9 +351,12 @@ function measures(nodes: LayoutNode[], bonds: LayoutBond[], cycles: number[][], 
 
 /**
  * Distinct columns (x) and rows (y) of the nodes, by kind (reactions, stores, ...) and summed over kinds,
- * leaving out `exclude` (a cycle's nodes, which a circle places). Fewer reads as tidier: nodes lined up.
+ * leaving out `exclude` (the nodes on a cycle's circle, which the circle places): what the layout's cost counts.
+ * Fewer reads as tidier: nodes lined up. `allColumns` and `allRows` are the distinct x and y of every node, of
+ * any kind, as the diagram shows them.
  */
-export function lineCount(nodes: LayoutNode[], exclude: Set<number> = new Set()): { columns: number, rows: number } {
+export function lineCount(nodes: LayoutNode[], exclude: Set<number> = new Set()):
+        { columns: number, rows: number, allColumns: number, allRows: number } {
     const kinds = new Map<string, number[]>()
     nodes.forEach((m, i) => { if (!exclude.has(i)) kinds.set(m.kind ?? 'other', [...(kinds.get(m.kind ?? 'other') ?? []), i]) })
     let columns = 0, rows = 0
@@ -360,7 +365,7 @@ export function lineCount(nodes: LayoutNode[], exclude: Set<number> = new Set())
         columns += distinct(idx.map(i => nodes[i]!.x))
         rows += distinct(idx.map(i => nodes[i]!.y))
     }
-    return { columns, rows }
+    return { columns, rows, allColumns: distinct(nodes.map(m => m.x)), allRows: distinct(nodes.map(m => m.y)) }
 }
 
 type Target = Rect                  // where a node must be: a rectangle, a segment or a point (a degenerate rectangle)
@@ -539,8 +544,7 @@ export async function reorganiseLayout(input: LayoutNode[], bonds: LayoutBond[],
     })
     const bodyOf = new Int32Array(n).fill(-1)
     bodies.forEach((b, k) => { for (const i of bodyNodes(b)) bodyOf[i] = k })
-    const inBody = new Set(bodies.flatMap(bodyNodes))
-    const before = measures(input, bonds, cycles, settings, options.weights, inBody)
+    const before = measures(input, bonds, cycles, settings, options.weights, inCycle)
     // each cycle's region (most of its nodes'), and the span its circle needs
     const cycleSpan = new Map<string, number>()
     const bodyLabel = bodies.map(body => {
@@ -751,7 +755,7 @@ export async function reorganiseLayout(input: LayoutNode[], bonds: LayoutBond[],
     const energyOf = () => {
         const c = withCircles(layoutComplexity(nodes, bonds, settings), nodes, cycles, options.weights)
         if (options.weights.align <= 0) return c
-        const lines = lineCount(nodes, inBody)
+        const lines = lineCount(nodes, inCycle)
         return { ...c, total: c.total + options.weights.align * (lines.columns + lines.rows) }
     }
     // nodes of a kind snapped to shared columns and rows (within half a bond), then apart along them; kept if better
@@ -759,7 +763,7 @@ export async function reorganiseLayout(input: LayoutNode[], bonds: LayoutBond[],
         const keep = nodes.map(m => ({ x: m.x, y: m.y }))
         const was = energyOf().total
         const kinds = new Map<string, number[]>()
-        nodes.forEach((m, i) => { if (bodyOf[i]! < 0) kinds.set(m.kind ?? 'other', [...(kinds.get(m.kind ?? 'other') ?? []), i]) })
+        nodes.forEach((m, i) => { if (!inCycle.has(i)) kinds.set(m.kind ?? 'other', [...(kinds.get(m.kind ?? 'other') ?? []), i]) })
         for (const idx of kinds.values()) {
             for (const axis of ['x', 'y'] as const) {
                 const sorted = [...idx].sort((a, b) => nodes[a]![axis] - nodes[b]![axis])
@@ -831,9 +835,9 @@ export async function reorganiseLayout(input: LayoutNode[], bonds: LayoutBond[],
                 nodes[i]!.x = nodes[j]!.x; nodes[i]!.y = nodes[j]!.y; nodes[j]!.x = t.x; nodes[j]!.y = t.y
             }
         } else if (choice < 0.55 && options.weights.align > 0) {
-            // a node into another's column or row, of its own kind (neither in a cycle)
+            // a node (not on a cycle's circle) into another's column or row, of its own kind
             const k = Math.floor(rand() * n), j = Math.floor(rand() * n)
-            if (k !== j && bodyOf[k]! < 0 && bodyOf[j]! < 0 && nodes[k]!.kind === nodes[j]!.kind) {
+            if (k !== j && !inCycle.has(k) && nodes[k]!.kind === nodes[j]!.kind) {
                 if (rand() < 0.5) nodes[k]!.x = nodes[j]!.x
                 else nodes[k]!.y = nodes[j]!.y
             }
@@ -876,7 +880,7 @@ export async function reorganiseLayout(input: LayoutNode[], bonds: LayoutBond[],
     const sx = (input.reduce((s, m) => s + m.x, 0) - nodes.reduce((s, m) => s + m.x, 0)) / n
     const sy = (input.reduce((s, m) => s + m.y, 0) - nodes.reduce((s, m) => s + m.y, 0)) / n
     for (const m of nodes) { m.x += sx; m.y += sy }
-    const after = measures(nodes, bonds, cycles, settings, options.weights, inBody)
+    const after = measures(nodes, bonds, cycles, settings, options.weights, inCycle)
     const improved = after.complexity.total < before.complexity.total
     const moveRect = (r: Rect) => ({ x0: r.x0 + sx, y0: r.y0 + sy, x1: r.x1 + sx, y1: r.y1 + sy })
     return {
