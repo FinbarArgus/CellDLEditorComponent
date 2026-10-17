@@ -30,6 +30,7 @@ import type { Styling } from './styling'
 export enum PANEL_ID {
     METADATA_PANEL = 'metadata-property-panel',
     PROPERTIES_PANEL = 'properties-property-panel',
+    REACTIONS_PANEL = 'reactions-panel',
     STYLE_PANEL = 'style-property-panel'
 }
 

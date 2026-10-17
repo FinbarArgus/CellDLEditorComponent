@@ -53,6 +53,7 @@
         "start": "cd app && bun run build:dev && vite preview",
         "test": "./scripts/install-bgrdf.sh && bun test tests/unit",
         "render-celldl": "./scripts/install-bgrdf.sh && bun scripts/render-celldl.ts",
+        "check-reactions": "./scripts/install-bgrdf.sh && bun scripts/check-reactions.ts",
         "version:new": "bun scripts/version.js"
     },
     "dependencies": {

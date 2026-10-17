@@ -84,6 +84,7 @@ import {
     definitionToLibraryTemplate,
     svgImageData
 } from './definitions'
+import { type BondInfo, equationText, type NodeInfo, type SpeciesNode, type StepEquation, stepEquation } from './equations'
 import { elementTemplatesQuery, styleOverrides, templateStyle } from './laws'
 import type {
     BGComponentLibrary,
@@ -315,6 +316,7 @@ export class BondgraphPlugin implements PluginInterface {
     }
     #componentTemplates: Map<string, BGLibraryComponentTemplate> = new Map()
     #currentDocumentUri: string = ''
+    #documentStore: MetadataStore|undefined
     #physicalDomains: Map<string, PhysicalDomain> = new Map()
     #rdfStore: $rdf.RdfStore = new $rdf.RdfStore()
     #transformNodeType = BGF.uri('TransformNode').value
@@ -402,6 +404,7 @@ export class BondgraphPlugin implements PluginInterface {
         rdfStore.add($rdf.namedNode(uri), $rdf.RDF.uri('type'), BGF.uri('BondgraphModel'))
 
         this.#currentDocumentUri = uri
+        this.#documentStore = rdfStore
 
         // Add a copy of the BG-RDF framework as a **named graph**, to use when
         // finding BondElements and JunctionStructures
@@ -447,7 +450,8 @@ export class BondgraphPlugin implements PluginInterface {
             statements.push(`<${this.#currentDocumentUri}> bgf:hasBondElement ${r.get('uri')!.toString()} .`)
         })
 
-        // Find the JunctionStructures in the diagram
+        // Find the JunctionStructures in the diagram; a composite (a reaction with its One Node, a store with its
+        // Zero Node) is a BondElement, whose junction bg2cellml makes from its template
 
         rdfStore.query(`${SPARQL_PREFIXES}
             PREFIX : <${this.#currentDocumentUri}#>
@@ -456,6 +460,10 @@ export class BondgraphPlugin implements PluginInterface {
             WHERE {
                 ?uri a ?type .
                 ?type rdfs:subClassOf* bgf:JunctionStructure
+                FILTER NOT EXISTS {
+                    ?uri a ?elementType .
+                    ?elementType rdfs:subClassOf* bgf:BondElement
+                }
             }`, true)
         .forEach((r: Map<string, $rdf.Term>) => {
             statements.push(`<${this.#currentDocumentUri}> bgf:hasJunctionStructure ${r.get('uri')!.toString()} .`)
@@ -521,6 +529,150 @@ export class BondgraphPlugin implements PluginInterface {
 
         }
         return {}
+    }
+
+    //==========================================================================
+
+    #subclassesOf(base: string): Set<string> {
+        const rows = this.#rdfStore.query(`${SPARQL_PREFIXES}
+            SELECT DISTINCT ?type WHERE { ?type rdfs:subClassOf* <${base}> }`)
+        return new Set([base, ...rows.map((r: Map<string, $rdf.Term>) => r.get('type')!.value)])
+    }
+
+    // The diagram's bonds and nodes, as ./equations.ts uses them
+    #diagramGraph() {
+        const bonds: BondInfo[] = []
+        const nodes: Map<string, NodeInfo> = new Map()
+        const steps: [string, boolean][] = []
+        const species: SpeciesNode[] = []
+        const store = this.#documentStore
+        if (!store) return { bonds, nodes, steps, species }
+        const prefix = `${this.#currentDocumentUri}#`
+        const reactions = this.#subclassesOf(BGF.uri('Reaction').value)
+        const resistances = this.#subclassesOf(BGF.uri('Resistance').value)
+        const transforms = this.#subclassesOf(this.#transformNodeType)
+        const stores = this.#subclassesOf(BGF.uri('QuantityStore').value)
+        const sources = this.#subclassesOf(BGF.uri('PotentialSource').value)
+        for (const r of store.query(`${SPARQL_PREFIXES}
+            SELECT ?bond ?source ?target ?count WHERE {
+                ?bond bgf:hasSource ?source ; bgf:hasTarget ?target .
+                OPTIONAL { ?bond bgf:bondCount ?count }
+            }`) as Map<string, $rdf.Term>[]) {
+            if (!r.get('bond')!.value.startsWith(prefix)) continue
+            bonds.push({
+                id: r.get('bond')!.value,
+                source: r.get('source')!.value,
+                target: r.get('target')!.value,
+                count: r.get('count') ? Number(r.get('count')!.value) : 1
+            })
+        }
+        for (const r of store.query(`${SPARQL_PREFIXES}
+            SELECT ?node ?type ?species ?location ?symbol ?value WHERE {
+                ?node a ?type .
+                OPTIONAL { ?node bgf:hasSpecies ?species }
+                OPTIONAL { ?node bgf:hasLocation ?location }
+                OPTIONAL { ?node bgf:hasSymbol ?symbol }
+                OPTIONAL { ?node bgf:hasValue ?value }
+            }`) as Map<string, $rdf.Term>[]) {
+            const node = r.get('node')!.value
+            if (!node.startsWith(prefix)) continue
+            const type = r.get('type')!.value
+            const info: NodeInfo = nodes.get(node) ?? {
+                species: r.get('species')?.value, location: r.get('location')?.value, symbol: r.get('symbol')?.value
+            }
+            if (transforms.has(type) && r.get('value')) {
+                info.transformRatio = parseFloat(r.get('value')!.value)
+            }
+            nodes.set(node, info)
+            if ((reactions.has(type) || resistances.has(type)) && !steps.some(([n]) => n === node)) {
+                steps.push([node, resistances.has(type)])
+            }
+            if ((stores.has(type) || sources.has(type)) && info.species && !species.some(n => n.id === node)) {
+                species.push({ id: node, species: info.species, location: info.location, isSource: sources.has(type) })
+            }
+        }
+        return { bonds, nodes, steps, species }
+    }
+
+    /**
+     * The diagram's reactions, transport steps and flows as equations in their usual form, from its bonds (see
+     * ./equations.ts), in the order of the diagram's elements.
+     */
+    reactionEquations(): StepEquation[] {
+        const { bonds, nodes, steps } = this.#diagramGraph()
+        return steps.map(([node, isResistance]) => stepEquation(node, isResistance, bonds, nodes))
+    }
+
+    /** The diagram's species stores and sources. */
+    speciesNodes(): SpeciesNode[] {
+        return this.#diagramGraph().species
+    }
+
+    /** The element type of a component (its template's, else its base component's). */
+    elementType(celldlObject: CellDLObject): string|undefined {
+        const pluginData = <PluginData>celldlObject.pluginData(this.id)
+        return pluginData.elementTemplate?.type ?? pluginData.baseComponent?.type
+    }
+
+    /** The id of the component library template to draw a new element of `elementType` from. */
+    libraryTemplateId(elementType: string): string|undefined {
+        const baseType = this.#elementTemplates.get(elementType)?.baseComponent.type ?? elementType
+        for (const [id, template] of this.#componentTemplates) {
+            if (template.type === baseType) return `${this.id}/${id}`
+        }
+    }
+
+    /**
+     * Give a component just added from a library template its element type, species and location, as the
+     * properties panel does, and optionally an initial value (an RDF literal, copied as it is).
+     */
+    async setElement(celldlObject: CellDLObject, elementType: string, species?: string, location?: string,
+                     value?: $rdf.Literal) {
+        const pluginData = <PluginData>celldlObject.pluginData(this.id)
+        const current = this.elementType(celldlObject)
+        if (current !== elementType) {
+            await this.#updateElementType(<ItemDetails>{}, { oldValue: current ?? '', newValue: elementType },
+                                          celldlObject)
+        }
+        if (species !== undefined) {
+            updateItemProperty(BGF.uri('hasSpecies').value, { oldValue: pluginData.species ?? '', newValue: species },
+                               celldlObject)
+            pluginData.species = species
+        }
+        if (location !== undefined) {
+            updateItemProperty(BGF.uri('hasLocation').value,
+                               { oldValue: pluginData.location ?? '', newValue: location }, celldlObject)
+            pluginData.location = location
+        }
+        if (value) {
+            const objectUri = celldlObject.uri.toString()
+            celldlObject.rdfStore.update(`${SPARQL_PREFIXES}
+                PREFIX : <${this.#currentDocumentUri}#>
+                DELETE WHERE { ${objectUri} bgf:hasValue ?value }`)
+            celldlObject.rdfStore.update(`${SPARQL_PREFIXES}
+                PREFIX : <${this.#currentDocumentUri}#>
+                INSERT DATA { ${objectUri} bgf:hasValue ${value.toString()} }`)
+        }
+        await this.#updateSvgElement(celldlObject, pluginData.species, pluginData.location)
+    }
+
+    /** Set a bond's bgf:bondCount (1 is left implicit). */
+    setBondCount(connection: CellDLConnection, count: number) {
+        const uri = connection.uri.toString()
+        connection.rdfStore.update(`${SPARQL_PREFIXES}
+            PREFIX : <${this.#currentDocumentUri}#>
+            DELETE WHERE { ${uri} bgf:bondCount ?count }`)
+        if (count !== 1) {
+            connection.rdfStore.update(`${SPARQL_PREFIXES}
+                PREFIX : <${this.#currentDocumentUri}#>
+                INSERT DATA { ${uri} bgf:bondCount ${Math.round(count)} }`)
+        }
+    }
+
+    hoverText(celldlObject: CellDLObject): string {
+        if (celldlObject.isConnection) return ''
+        const step = this.reactionEquations().find(eq => eq.id === celldlObject.uri.value)
+        return step ? equationText(step) : ''
     }
 
     statusText(celldlObject: CellDLObject): string {

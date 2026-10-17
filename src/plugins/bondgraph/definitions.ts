@@ -168,6 +168,14 @@ export const BONDGRAPH_COMPONENT_DEFINITIONS: BGComponentDefinition[] = [
         style: REACTION_STYLE
     },
     {
+        id: 'OneReactionNode',
+        type: 'https://bg-rdf.org/ontologies/bondgraph-framework#OneReactionNode',
+        name: 'One reaction node',
+        numPorts: Infinity,     // a bond for each species (a ChemicalReactionNode)
+        symbol: 'Rx',
+        style: REACTION_STYLE
+    },
+    {
         id: 'TransformNode',
         type: 'https://bg-rdf.org/ontologies/bondgraph-framework#TransformNode',
         name: 'Transform node',
