@@ -23,6 +23,8 @@ limitations under the License.
 // A CellDL document from a generated bond graph (a "CellDL spec": its Turtle, and its elements and connections
 // with positions), with each element's image drawn as the editor draws it (see app/render-celldl.html).
 
+import { arrowMarker } from './arrows'
+
 //==============================================================================
 
 export interface SpecElement {
@@ -59,9 +61,8 @@ export interface ElementImage {
 
 const MARGIN = 30
 
-const ARROW_MARKER = `<marker id="connection-end-arrow-bondgraph" viewBox="0 0 11 10" class="bondgraph" refX="10" refY="5" \
-orient="auto-start-reverse" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8">\
-<path fill="currentcolor" stroke="currentcolor" d="M0,0 L10.1,4.4 L10.1,5.6 L0,10 L2,5 z"/></marker>`
+// PhLynx's arrowhead, as the editor draws a bond's
+const ARROW_MARKER = arrowMarker('connection-end-arrow-bondgraph', 'bondgraph', 'currentcolor')
 
 const STYLE = '.celldl-Connection.bondgraph.arrow{marker-end:url(#connection-end-arrow-bondgraph)}'
             + '.celldl-Connection{fill:none;stroke:#555;stroke-width:1.2px;color:#555}'
