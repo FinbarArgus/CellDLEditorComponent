@@ -41,7 +41,10 @@ limitations under the License.
 //     and row each kind of node takes (lineCount), weighted by the options: first a snap of nearly lined-up
 //     nodes of a kind onto shared columns and rows, then moves of single nodes, of a node into another's
 //     column or row, of a cycle (moved, turned, flipped), of a split region's stray piece, and swaps of two
-//     nodes of a region; the best layout is kept, centred where the layout was.
+//     nodes of a region; the best layout is kept.
+//  7. A last snap (snapToLines): nodes of a kind within a fifth of a bond of one line move onto it, a group at a
+//     time, kept only when that costs nothing and every node stays where it must be; then the layout is centred
+//     where it was.
 
 import {
     type Complexity, complexityOptions, layoutComplexity, type LayoutBond, type LayoutNode, type Point2, type Rect,
@@ -368,7 +371,41 @@ export function lineCount(nodes: LayoutNode[], exclude: Set<number> = new Set())
     return { columns, rows, allColumns: distinct(nodes.map(m => m.x)), allRows: distinct(nodes.map(m => m.y)) }
 }
 
-type Target = Rect                  // where a node must be: a rectangle, a segment or a point (a degenerate rectangle)
+/**
+ * Nodes of a kind (not in `exclude`) whose x (or y) lie within `tolerance` of the first of their group take one
+ * value, the group's median, a group at a time. A snap is kept when every node of the group is `allowed` where it
+ * lands and `energy` is no higher, else undone. Returns how many groups were snapped.
+ */
+export function snapToLines(nodes: LayoutNode[], exclude: Set<number>, tolerance: number, allowed: (i: number) => boolean,
+                            energy: () => number): number {
+    let energyNow = energy(), snapped = 0
+    const kinds = new Map<string, number[]>()
+    nodes.forEach((m, i) => { if (!exclude.has(i)) kinds.set(m.kind ?? 'other', [...(kinds.get(m.kind ?? 'other') ?? []), i]) })
+    for (const idx of kinds.values()) {
+        for (const axis of ['x', 'y'] as const) {
+            const sorted = [...idx].sort((a, b) => nodes[a]![axis] - nodes[b]![axis])
+            const groups: number[][] = []
+            for (const i of sorted) {
+                const group = groups[groups.length - 1]
+                if (group && nodes[i]![axis] - nodes[group[0]!]![axis] <= tolerance) group.push(i)
+                else groups.push([i])
+            }
+            for (const group of groups) {
+                const values = group.map(i => nodes[i]![axis]).sort((a, b) => a - b)
+                if (values[values.length - 1]! - values[0]! <= 0.5) continue          // already one line
+                const median = values[Math.floor(values.length / 2)]!
+                const old = group.map(i => nodes[i]![axis])
+                group.forEach(i => { nodes[i]![axis] = median })
+                const measured = group.every(allowed) ? energy() : Infinity
+                if (measured <= energyNow + 1e-9) { energyNow = measured; snapped++ }
+                else group.forEach((i, k) => { nodes[i]![axis] = old[k]! })
+            }
+        }
+    }
+    return snapped
+}
+
+type Target = Rect                 // where a node must be: a rectangle, a segment or a point (a degenerate rectangle)
 
 interface Slicing { leaf?: string, cut?: 'x'|'y', a?: Slicing, b?: Slicing }
 
@@ -874,8 +911,19 @@ export async function reorganiseLayout(input: LayoutNode[], bonds: LayoutBond[],
         }
         if (onProgress && it % 100 === 0) await onProgress(options.sgdSweeps + it * options.steps / steps, total)
     }
-    Object.assign(WEIGHTS, saved)
     best.forEach((p, i) => { nodes[i]!.x = p.x; nodes[i]!.y = p.y })
+    // 7. a last snap onto shared columns and rows, kept where it costs nothing and every node stays where it must be
+    // (in its region's rectangle, a boundary step on its edge)
+    if (options.weights.align > 0) {
+        const allowed = (i: number) => {
+            const t = targetOf(i)
+            if (!t) return true
+            const p = clampTo(nodes[i]!, t)
+            return Math.abs(p.x - nodes[i]!.x) < 1e-6 && Math.abs(p.y - nodes[i]!.y) < 1e-6
+        }
+        snapToLines(nodes, inCycle, 0.2 * L, allowed, () => energyOf().total)
+    }
+    Object.assign(WEIGHTS, saved)
     // centred where the layout was
     const sx = (input.reduce((s, m) => s + m.x, 0) - nodes.reduce((s, m) => s + m.x, 0)) / n
     const sy = (input.reduce((s, m) => s + m.y, 0) - nodes.reduce((s, m) => s + m.y, 0)) / n

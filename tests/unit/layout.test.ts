@@ -1,7 +1,7 @@
 /** biome-ignore-all lint/style/noNonNullAssertion: <test fixtures exist> */
 import { describe, expect, test } from 'bun:test'
 
-import { circularity, findCycles, lineCount, planRectangles, presetOptions, reorganiseLayout } from '../../src/plugins/bondgraph/layout'
+import { circularity, findCycles, lineCount, planRectangles, presetOptions, reorganiseLayout, snapToLines } from '../../src/plugins/bondgraph/layout'
 import type { LayoutBond, LayoutNode } from '../../src/plugins/bondgraph/regions'
 
 const node = (id: string, x: number, y: number, labels: string[], kind = 'store', text = id): LayoutNode =>
@@ -157,6 +157,26 @@ describe('lines and rectangles', () => {
         // the four side compounds take fewer than four columns plus four rows
         const sources = moved.filter(n => n.kind === 'source')
         expect(lineCount(sources).columns + lineCount(sources).rows).toBeLessThan(8)
+    })
+
+    test('a last snap puts near-misses of a kind on one line, unless that costs something or leaves a node misplaced', () => {
+        const make = () => [node('r1', 0, 0, ['c'], 'reaction'), node('r2', 100, 2, ['c'], 'reaction'),
+                            node('r3', 200, -3, ['c'], 'reaction'), node('s1', 50, 1, ['c']), node('far', 300, 40, ['c'], 'reaction')]
+        // free to snap: the reactions take one row (their median, 0); the store and the far reaction keep theirs
+        const nodes = make()
+        expect(snapToLines(nodes, new Set(), 10, () => true, () => 0)).toBe(1)
+        expect(nodes.map(n => n.y)).toEqual([0, 0, 0, 1, 40])
+        expect(lineCount(nodes).rows).toBe(3)
+        // a snap that raises the energy, or moves a node where it may not be, is undone
+        const costly = make()
+        expect(snapToLines(costly, new Set(), 10, () => true, () => costly[1]!.y === 0 ? 1 : 0)).toBe(0)
+        expect(costly.map(n => n.y)).toEqual([0, 2, -3, 1, 40])
+        const held = make()
+        expect(snapToLines(held, new Set(), 10, i => i !== 2, () => 0)).toBe(0)
+        // a circle's nodes are left as they are
+        const circle = make()
+        snapToLines(circle, new Set([1]), 10, () => true, () => 0)
+        expect(circle[1]!.y).toBe(2)
     })
 
     test('three regions meet at a corner, and two steps joining all three sit apart across it', () => {
