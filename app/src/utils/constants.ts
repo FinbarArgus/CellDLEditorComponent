@@ -8,5 +8,5 @@ const crtYear = new Date().getFullYear()
 
 export const COPYRIGHT = crtYear === 2025 ? '2025' : `2025-${String(crtYear)}`
 
-// After the editor reports ready, before opening a file given as ?open=<url> (its component is still mounting)
-export const OPEN_URL_DELAY = 500
+// After the editor reports ready, before opening a document given in the URL (its component is still mounting)
+export const OPEN_LINK_DELAY = 500
