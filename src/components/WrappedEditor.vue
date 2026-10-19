@@ -63,6 +63,7 @@ import type { PopoverEventData, ViewState } from '#root/utils/editor-types'
 import PropertiesPanel from './panels/PropertiesPanel.vue'
 import ReactionsPanel from './panels/ReactionsPanel.vue'
 import VariablesPanel from './panels/VariablesPanel.vue'
+import AnnotationsPanel from './panels/AnnotationsPanel.vue'
 import StylingPanel from './panels/StylingPanel.vue'
 
 import EditorToolbar from './toolbar/EditorToolbar.vue'
@@ -286,6 +287,12 @@ const panelButtons = vue.ref<EditorToolButton[]>([
         prompt: 'Variables',
         icon: 'lucide-Tags',
         panel: vue.markRaw(VariablesPanel)
+    },
+    {
+        toolId: PANEL_ID.ANNOTATIONS_PANEL,
+        prompt: 'Annotations',
+        icon: 'lucide-BookMarked',
+        panel: vue.markRaw(AnnotationsPanel)
     }
 ])
 
@@ -351,6 +358,10 @@ vue.watch(
             } else if (options.action === 'map-variables') {
                 // open the Variables panel
                 const button = document.getElementById(PANEL_ID.VARIABLES_PANEL)
+                if (button && !button.classList.contains('active')) button.click()
+            } else if (options.action === 'annotate') {
+                // open the Annotations panel
+                const button = document.getElementById(PANEL_ID.ANNOTATIONS_PANEL)
                 if (button && !button.classList.contains('active')) button.click()
             }
         } else if (props.editorCommand?.command === 'set-state') {

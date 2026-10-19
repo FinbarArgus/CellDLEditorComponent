@@ -200,6 +200,11 @@
     font-family: ui-monospace, monospace;
     font-size: 0.85rem;
 }
+.bg-law-annotation {
+    font-family: ui-monospace, monospace;
+    font-size: 0.8rem;
+    opacity: 0.85;
+}
 .bg-law-label {
     font-size: 0.75rem;
     opacity: 0.75;

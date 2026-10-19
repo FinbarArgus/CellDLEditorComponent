@@ -6,8 +6,10 @@
 // google-chrome), then on its first reaction with a substrate: doubles that substrate's coefficient and adds a
 // product with no store (a new store), checks the equation, puts it back, adds a chemostat's species (a copy beside
 // the reaction) and removes it again (the copy goes); then adds a new reaction of two new species, and checks every
-// reaction's hover text is its equation. Prints what it checked and writes the edited document to OUT. Exits 1 if
-// a check fails.
+// reaction's hover text is its equation. Then, in the Annotations panel, gives the first reaction a Rhea ID and
+// the first species a ChEBI ID, checks they are saved as bqbiol triples (and removed when cleared) and shown in the
+// hovers, and that an ID of the wrong form is not saved. Prints what it checked, writes the edited document to OUT
+// and a screenshot of the Annotations panel to OUT.annotations.png. Exits 1 if a check fails.
 
 import { spawn } from 'node:child_process'
 import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs'
@@ -242,7 +244,73 @@ const scenario = (src: string) => `(async () => {
           && saved.rules.length === chemistry.rules.length, saved.rules.length)
     const preview = naming.previewNames(plugin.namingElements(), saved.rules, saved.overrides)
     const names = Object.fromEntries([...preview].map(([key, name]) => [key.split('#').pop(), name]))
-    return { checks, document: await diagram.serialise(), names, asOpened }
+
+    // the Annotations panel: a Rhea ID and a ChEBI ID typed, applied, saved as bqbiol triples and shown in the hovers;
+    // the panel is left open for the screenshot
+    document.getElementById('annotations-panel').click()
+    await wait(500)
+    const reactionRows = () => [...document.querySelectorAll('.reaction-annotation')]
+    const speciesRows = () => [...document.querySelectorAll('.species-annotation')]
+    const reactionSteps = steps().filter(e => e.kind !== 'flow')
+    const speciesKeys = new Set(plugin.speciesNodes().map(n => n.species + '[' + (n.location ?? '') + ']'))
+    check('the Annotations panel lists every reaction and species', reactionRows().length === reactionSteps.length
+          && speciesRows().length === speciesKeys.size && reactionRows().length > 0,
+          reactionRows().length + ' reactions, ' + speciesRows().length + ' species')
+    const type = (row, selector, value) => {
+        const input = row.querySelector(selector)
+        input.value = value
+        input.dispatchEvent(new Event('change'))
+    }
+    const applyAnnotations = async () => {
+        await wait(100)
+        document.querySelector('button.apply-annotations').click()
+        await wait(300)
+    }
+    const annotatedStep = reactionSteps[0]
+    const annotatedRow = () => reactionRows().find(r => r.dataset.element === annotatedStep.id)
+    const speciesRow = () => speciesRows()[0]
+    const speciesKey = speciesRow().dataset.species
+    const speciesElements = plugin.speciesNodes().filter(n => n.species + '[' + (n.location ?? '') + ']' === speciesKey)
+    type(annotatedRow(), 'input.rhea', '17825')
+    type(speciesRow(), 'input.chebi', 'CHEBI:4167')
+    type(speciesRow(), 'input.go', '5829')
+    await wait(100)
+    check('an ID of the wrong form is shown as an error', !!speciesRow().querySelector('.error'),
+          speciesRow().querySelector('.error')?.textContent)
+    await applyAnnotations()
+    const RHEA = '<http://biomodels.net/biology-qualifiers/isVersionOf> <https://identifiers.org/rhea:17825>'
+    const CHEBI = '<http://biomodels.net/biology-qualifiers/is> <https://identifiers.org/CHEBI:4167>'
+    const savedAnnotations = plugin.annotations()
+    check('the Rhea ID is saved on the reaction', savedAnnotations.get(annotatedStep.id)?.rhea === '17825',
+          savedAnnotations.get(annotatedStep.id))
+    check('the ChEBI ID is saved on every element of the species, the bad GO ID is not',
+          speciesElements.length > 0 && speciesElements.every(n => savedAnnotations.get(n.id)?.chebi === '4167'
+                                                                   && !savedAnnotations.get(n.id)?.go),
+          speciesKey + ': ' + speciesElements.map(n => n.id.split('#').pop()).join(', '))
+    const tripleRows = () => diagram.rdfStore.query(
+        'SELECT ?s ?p ?o WHERE { ?s ?p ?o . FILTER (STRSTARTS(STR(?o), "https://identifiers.org/")) }')
+        .map(r => '<' + r.get('s').value + '> <' + r.get('p').value + '> <' + r.get('o').value + '>')
+    const savedTriples = tripleRows()
+    check('they are the spec\\'s triples in the document', savedTriples.includes('<' + annotatedStep.id + '> ' + RHEA)
+          && speciesElements.every(n => savedTriples.includes('<' + n.id + '> ' + CHEBI)), savedTriples)
+    const serialised = await diagram.serialise()
+    check('and in the saved document', serialised.includes('identifiers.org/rhea:17825')
+          && serialised.includes('identifiers.org/CHEBI:4167'))
+    const reactionHoverNow = hoverOf(annotatedStep.id)
+    check('the reaction\\'s hover shows its Rhea ID', reactionHoverNow.includes('Rhea 17825'),
+          (reactionHoverNow.match(/bg-law-annotation">[^<]*/) ?? [''])[0])
+    const speciesHover = hoverOf(speciesElements[0].id)
+    check('the species\\' hover shows its ChEBI ID', speciesHover.includes('CHEBI:4167'),
+          (speciesHover.match(/bg-law-annotation">[^<]*/) ?? [''])[0])
+    type(annotatedRow(), 'input.rhea', '')
+    await applyAnnotations()
+    check('clearing an ID removes its triple', !tripleRows().some(t => t.includes('rhea:17825'))
+          && !hoverOf(annotatedStep.id).includes('Rhea 17825'))
+    type(annotatedRow(), 'input.rhea', '17825')
+    type(speciesRow(), 'input.go', '0005829')
+    await applyAnnotations()
+    const annotationTriples = tripleRows()
+    return { checks, document: await diagram.serialise(), names, asOpened, annotationTriples }
 })()`
 
 let failed = false
@@ -257,7 +325,7 @@ try {
         console.error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text)
         failed = true
     } else {
-        const { checks, document: edited, names, asOpened } = result.result.value
+        const { checks, document: edited, names, asOpened, annotationTriples } = result.result.value
         for (const c of checks) {
             console.log(`${c.ok ? 'ok  ' : 'FAIL'} ${c.what}${c.detail !== undefined ? `: ${JSON.stringify(c.detail)}` : ''}`)
             failed ||= !c.ok
@@ -270,9 +338,16 @@ try {
         console.log(`${both.length === 0 ? 'ok  ' : 'FAIL'} the saved document lists no component as both a bond`
                     + ` element and a junction${both.length ? `: ${both.join(', ')}` : ''}`)
         failed ||= both.length > 0
+        if (annotationTriples) {
+            console.log('annotation triples:')
+            for (const t of annotationTriples) console.log(`    ${t} .`)
+        }
         if (out) {
             writeFileSync(out, edited)
             console.log(`edited document: ${out}`)
+            const shot = await send(socket, 'Page.captureScreenshot', { format: 'png' })
+            writeFileSync(`${out}.annotations.png`, Buffer.from(shot.data, 'base64'))
+            console.log(`the Annotations panel: ${out}.annotations.png`)
             if (names) {
                 // the Variables panel's names, element|variable -> name, to compare with bgtool --list-variables
                 writeFileSync(`${out}.names.json`, JSON.stringify(names, null, 1))

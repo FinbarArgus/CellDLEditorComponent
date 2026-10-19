@@ -32,6 +32,7 @@ export enum PANEL_ID {
     PROPERTIES_PANEL = 'properties-property-panel',
     REACTIONS_PANEL = 'reactions-panel',
     VARIABLES_PANEL = 'variables-panel',
+    ANNOTATIONS_PANEL = 'annotations-panel',
     STYLE_PANEL = 'style-property-panel'
 }
 

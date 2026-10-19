@@ -84,6 +84,9 @@ import {
     definitionToLibraryTemplate,
     svgImageData
 } from './definitions'
+import {
+    type Annotation, ANNOTATION_PREDICATES, annotationText, planAnnotationChanges, readAnnotations, type Triple
+} from './annotations'
 import { type BondInfo, equationText, type NodeInfo, type SpeciesNode, type StepEquation, stepEquation } from './equations'
 import { elementTemplatesQuery, styleOverrides, templateStyle } from './laws'
 import { type MathNode, mathmlLatex, sumText, whereText } from './lawtext'
@@ -706,6 +709,35 @@ export class BondgraphPlugin implements PluginInterface {
         }
     }
 
+    /** The annotations of the diagram's elements (./annotations.ts), by element URI. */
+    annotations(): Map<string, Annotation> {
+        const store = this.#documentStore
+        if (!store) return new Map()
+        const prefix = `${this.#currentDocumentUri}#`
+        const triples: Triple[] = []
+        for (const r of store.query(`${SPARQL_PREFIXES}
+            SELECT ?s ?p ?o WHERE {
+                ?s ?p ?o .
+                FILTER (?p IN (${ANNOTATION_PREDICATES.map(p => `<${p}>`).join(', ')}))
+            }`) as Map<string, $rdf.Term>[]) {
+            const subject = r.get('s')!.value
+            if (subject.startsWith(prefix)) {
+                triples.push({ subject, predicate: r.get('p')!.value, object: r.get('o')!.value })
+            }
+        }
+        return readAnnotations(triples)
+    }
+
+    /** Give these elements these annotations (removing any they no longer have); they are saved with the document. */
+    setAnnotations(wanted: Map<string, Annotation>) {
+        const store = this.#documentStore
+        if (!store) return
+        const { remove, add } = planAnnotationChanges(this.annotations(), wanted)
+        const data = (triples: Triple[]) => triples.map(t => `<${t.subject}> <${t.predicate}> <${t.object}> .`).join('\n')
+        if (remove.length) store.update(`DELETE DATA { ${data(remove)} }`)
+        if (add.length) store.update(`INSERT DATA { ${data(add)} }`)
+    }
+
     /**
      * The diagram's regions (./regions.ts): each store's and source's location, each step's species' locations
      * (several for a step between compartments), and the bonds between nodes.
@@ -822,14 +854,18 @@ export class BondgraphPlugin implements PluginInterface {
      * What an element's hover shows (./lawtext.ts): its constitutive law, typeset in its template's symbols, and
      * each symbol's CellML name (./naming.ts) with what the bonds make it: a reaction's u_f and u_r (the potentials
      * bonded to each side, a transformer's scaled by its ratio), a store's flow (its reactions' flows), a
-     * resistance's potential (the difference across it). '' for an element without a law.
+     * resistance's potential (the difference across it), and its annotations (./annotations.ts). An element without
+     * a law shows only its annotations ('' when it has none).
      */
     hoverHtml(celldlObject: CellDLObject): string {
         if (celldlObject.isConnection) return ''
         const templateType = (<PluginData>celldlObject.pluginData(this.id)).elementTemplate?.type
         const law = templateType ? this.#law(templateType) : null
-        if (!law) return ''
         const id = celldlObject.uri.value
+        const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        const annotated = annotationText(this.annotations().get(id))
+        const annotation = annotated ? `<div class="bg-law-annotation">${escape(annotated)}</div>` : ''
+        if (!law) return annotation ? `<div class="bg-law">${annotation}</div>` : ''
         const elements = this.namingElements()
         const element = elements.find(e => e.id === id)
         if (!element) return ''
@@ -872,9 +908,9 @@ export class BondgraphPlugin implements PluginInterface {
             symbol, name: names.get(`${id}|${symbol}`) ?? symbol, is: connected.get(symbol)
         })))
         const step = this.reactionEquations().find(eq => eq.id === id)
-        const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         return '<div class="bg-law">'
             + (step ? `<div class="bg-law-equation">${escape(equationText(step))}</div>` : '')
+            + annotation
             + (law.label ? `<div class="bg-law-label">${escape(law.label)}</div>` : '')
             + (law.svg ? `<div class="bg-law-math">${law.svg}</div>` : '')
             + `<div class="bg-law-where">${lines.map(escape).join('<br>')}</div>`

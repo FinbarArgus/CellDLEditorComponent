@@ -264,6 +264,13 @@ const menuItems = [
                 command: () => {
                     emit('edit-action', 'map-variables')
                 }
+            },
+            {
+                label: 'Annotate reactions and species…',
+                icon: 'pi pi-bookmark',
+                command: () => {
+                    emit('edit-action', 'annotate')
+                }
             }
         ]
     },
