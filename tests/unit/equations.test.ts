@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import {
-    type BondInfo, equationText, FARADAY, findSpeciesNode, type NodeInfo, parseEquation, planEquationEdit, stepEquation
+    type BondInfo, equationLatex, equationText, FARADAY, labelLatex, findSpeciesNode, type NodeInfo, parseEquation, planEquationEdit, stepEquation
 } from '../../src/plugins/bondgraph/equations'
 
 const nodes = (entries: [string, NodeInfo][]) => new Map<string, NodeInfo>(entries)
@@ -22,6 +22,7 @@ describe('reaction equations from bonds', () => {
         expect(eq.kind).toBe('reaction')
         expect(eq.name).toBe('ATP synthase')
         expect(equationText(eq)).toBe('2 ADP[m] + Pi[m] ⇌ ATP[m]')
+        expect(equationLatex(eq)).toBe('2\\,\\mathrm{ADP}[\\mathrm{m}] + \\mathrm{Pi}[\\mathrm{m}] \\rightleftharpoons \\mathrm{ATP}[\\mathrm{m}]')
     })
 
     test('moving a species unchanged between compartments is transport, with a two-sided arrow', () => {
@@ -83,6 +84,7 @@ describe('reaction equations from bonds', () => {
         expect(eq.kind).toBe('transport')
         expect(eq.charge).toEqual({ count: -1, location: 'm' })
         expect(equationText(eq)).toBe('ATP[m] + ADP[c] ⇄ ATP[c] + ADP[m]   (moves 1 charge out of [m])')
+        expect(equationLatex(eq)).toMatch(/\\leftrightarrows .*\\qquad \\text\{\(moves 1 charge out of \[m\]\)\}$/)
     })
 })
 
@@ -143,5 +145,14 @@ describe('editing an equation', () => {
         expect(findSpeciesNode(nodes, 'ATP', 'm')?.id).toBe('q_ATP_m')
         expect(findSpeciesNode(nodes, 'Glc', 'c')).toBeUndefined()
         expect(() => findSpeciesNode(nodes, 'ATP')).toThrow(/more than one compartment \(c, m\)/)
+    })
+})
+
+describe('labels as LaTeX', () => {
+    test('a plain name is upright math; anything else is text, with braces, backslashes and $ set outside it', () => {
+        expect(labelLatex('ATP')).toBe('\\mathrm{ATP}')
+        expect(labelLatex('ATP synthase')).toBe('\\text{ATP synthase}')
+        expect(labelLatex('a_b%')).toBe('\\text{a_b%}')
+        expect(labelLatex('x{y}\\$')).toBe('\\text{x}\\{\\text{y}\\}\\backslash \\$')
     })
 })

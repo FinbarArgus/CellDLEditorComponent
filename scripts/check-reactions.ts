@@ -215,16 +215,19 @@ const scenario = (src: string) => `(async () => {
     const reactionStep = steps().find(e => e.kind === 'reaction' && e.substrates.some(p => p.node))
     const reactionHover = hoverOf(reactionStep.id)
     const substrateNames = reactionStep.substrates.filter(p => p.node).map(p => named().get(p.node + '|u'))
-    const forward = (reactionHover.match(/u_f = [^<]*/) ?? [''])[0]
+    const forward = (reactionHover.match(/data-text="u_f = [^"]*/) ?? [''])[0]
     check('a reaction\\'s hover shows its law and the potentials bonded to its forward side',
           reactionHover.includes('<svg') && substrateNames.every(n => forward.includes(n)), forward)
     const storeNode = plugin.speciesNodes().find(n => !n.isSource)
     const storeHover = storeNode ? hoverOf(storeNode.id) : ''
     const feeding = steps().filter(e => [...e.substrates, ...e.products].some(p => p.node === storeNode?.id))
                            .map(e => named().get(e.id + '|v'))
-    const flowLine = (storeHover.match(/(^|>)v = [^<]*/) ?? [''])[0]
+    const flowLine = (storeHover.match(/data-text="v = [^"]*/) ?? [''])[0]
     check('a store\\'s hover shows its law and the flows of its reactions', storeHover.includes('<svg') && feeding.length > 0
           && feeding.every(n => flowLine.includes(n)), flowLine)
+    const hoverLines = new DOMParser().parseFromString(reactionHover, 'text/html').querySelectorAll('.bg-law-line')
+    check('a reaction\\'s equation and symbols are typeset in the hover, as its law is',
+          hoverLines.length > 1 && [...hoverLines].every(l => l.querySelector('svg')), hoverLines.length)
 
     // the Variables panel: choose a convention and apply it; it is saved with the document
     document.getElementById('variables-panel').click()
