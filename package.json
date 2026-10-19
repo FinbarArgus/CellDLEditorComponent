@@ -51,6 +51,7 @@
         "format:check": "bunx --bun biome format --config-path ./biome.json --max-diagnostics=none",
         "lint": "bunx --bun biome lint --config-path ./biome.json --fix --error-on-warnings --max-diagnostics=none",
         "start": "cd app && bun run build:dev && vite preview",
+        "test": "./scripts/install-bgrdf.sh && bun test tests/unit",
         "version:new": "bun scripts/version.js"
     },
     "dependencies": {

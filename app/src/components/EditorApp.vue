@@ -116,8 +116,9 @@ import '../assets/app.css'
 
 import AboutDialog from './dialogs/AboutDialog.vue'
 
-import { SHORT_DELAY } from '../utils/constants'
+import { OPEN_LINK_DELAY, SHORT_DELAY } from '../utils/constants'
 import { isCompatibleBrowser } from '../utils/common'
+import { decodeCellDLLink, loadFromLink } from '../utils/openLink'
 import * as version from '../utils/version'
 import * as vueCommon from '../utils/vueCommon'
 
@@ -147,6 +148,9 @@ const loadingMessage = vue.ref<string>('Loading CellDL editor');
     if (editorInitialised()) {
         loadingMessage.value = ''
         console.log('Editor ready...')
+
+        // Open the document in a `?open=celldl#<base64>` link, once the editor component has mounted
+        setTimeout(() => { openLinkedDocument() }, OPEN_LINK_DELAY)
 
         // Now start checking for a newer version of the editor
         version.startCheck()
@@ -428,20 +432,33 @@ async function openFile() {
         currentFileHandle = fileHandles[0]
         if (currentFileHandle) {
             const file = await currentFileHandle.getFile()
-            const contents = await file.text()
-            editorCommand.value = {
-                command: 'file',
-                options: {
-                    action: 'open',
-                    data: contents,
-                    name: currentFileHandle.name
-                }
-            }
-            fileStatus.value.haveData = true
-            diagramModified(false)
-            windowTitle.value = currentFileHandle.name
+            openDocument(await file.text(), currentFileHandle.name)
         }
     }
+}
+
+function openDocument(contents: string, name: string) {
+    editorCommand.value = {
+        command: 'file',
+        options: {
+            action: 'open',
+            data: contents,
+            name: name
+        }
+    }
+    fileStatus.value.haveData = true
+    diagramModified(false)
+    windowTitle.value = name
+}
+
+// Opens the CellDL document in `?open=celldl#<base64>` (named by an optional `&name=`, else "Linked diagram")
+async function openLinkedDocument() {
+    const name = new URLSearchParams(window.location.search).get('name') || 'Linked diagram'
+    await loadFromLink({
+        celldl: (data: string) => {
+            openDocument(decodeCellDLLink(data), name)
+        }
+    }, onError)
 }
 
 //==============================================================================
