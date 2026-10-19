@@ -259,6 +259,8 @@ const scenario = (src: string) => `(async () => {
     check('the Annotations panel lists every reaction and species', reactionRows().length === reactionSteps.length
           && speciesRows().length === speciesKeys.size && reactionRows().length > 0,
           reactionRows().length + ' reactions, ' + speciesRows().length + ' species')
+    check('each reaction\\'s equation is typeset', reactionRows().every(r => r.querySelector('.equation svg')),
+          reactionRows().filter(r => !r.querySelector('.equation svg')).map(r => r.dataset.element))
     const type = (row, selector, value) => {
         const input = row.querySelector(selector)
         input.value = value
@@ -312,6 +314,23 @@ const scenario = (src: string) => `(async () => {
     type(annotatedRow(), 'input.rhea', '17825')
     type(speciesRow(), 'input.go', '0005829')
     await applyAnnotations()
+    // a lumped step: its Rhea parts (fetched live) typeset one under another, what cancels struck through, then the net
+    const lumpedRow = reactionRows()[1]
+    if (lumpedRow) {
+        const lumpedBox = lumpedRow.querySelector('input.lumped')
+        lumpedBox.checked = true
+        lumpedBox.dispatchEvent(new Event('change'))
+        await wait(100)
+        type(lumpedRow, 'input.parts', '17825, 11816')
+        const shownParts = () => lumpedRow.querySelectorAll('.combination .part')
+        for (let i = 0; i < 150 && !lumpedRow.querySelector('.combination .verdict'); i += 1) await wait(100)
+        const struck = [...shownParts()].filter(p => p.querySelector('[data-mml-node="menclose"]')).length
+        check('a lumped step\\'s parts are typeset with what cancels struck through, then the net equation',
+              shownParts().length === 3 && struck === 2 && !!lumpedRow.querySelector('.combination .verdict'),
+              shownParts().length + ' rows, ' + struck + ' struck; '
+              + (lumpedRow.querySelector('.combination')?.textContent ?? 'no combination'))
+        lumpedRow.scrollIntoView()      // typed, not applied: shown in the screenshot, not saved
+    }
     const annotationTriples = tripleRows()
     return { checks, document: await diagram.serialise(), names, asOpened, annotationTriples }
 })()`

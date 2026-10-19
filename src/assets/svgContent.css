@@ -216,7 +216,7 @@
     flex-direction: column;
     gap: 2px;
 }
+/* inline, so a line MathJax breaks in pieces (and the baselines it sets) flow as text does */
 .bg-law-line svg {
-    max-width: 100%;
-    height: auto;
+    display: inline;
 }

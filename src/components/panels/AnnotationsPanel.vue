@@ -14,7 +14,7 @@
                     .heading
                         span.name {{ r.name }}
                         span.kind {{ r.kind }}
-                    .equation {{ r.equation }}
+                    .equation.math(v-html="r.equationSvg" :data-text="r.equation")
                     label.check
                         input.lumped(type="checkbox" :checked="r.lumped" @change="setLumped(r, checked($event))")
                         | Lumped: parts
@@ -37,6 +37,16 @@
                             a.link(v-for="id in partIds(r.parts)" :key="id" :href="identifierLink('rhea', id)"
                                    target="_blank" rel="noopener") {{ id }}
                         .error(v-if="partsError(r.parts)") {{ partsError(r.parts) }}
+                        .combination(v-if="combinations[r.id]" :data-element="r.id")
+                            p.note(v-if="combinations[r.id].message") {{ combinations[r.id].message }}
+                            template(v-else)
+                                .part(v-for="part in combinations[r.id].parts" :key="part.id")
+                                    .part-id {{ part.id }}
+                                    .math(v-html="part.svg")
+                                .part.net
+                                    .part-id net
+                                    .math(v-html="combinations[r.id].net")
+                                p.verdict(:class="combinations[r.id].matches ? 'matches' : 'differs'") {{ combinations[r.id].verdict }}
                     .row
                         label(:for="`sbo-${r.key}`") Type
                         select.sbo(:id="`sbo-${r.key}`" :value="r.sbo" :aria-label="`SBO type of ${r.name}`"
@@ -96,7 +106,11 @@ import {
     type Annotation, emptyAnnotation, type IdKind, idError, identifierLink, normaliseId, SBO_TYPES, speciesAnnotations,
     speciesGroups
 } from '#root/plugins/bondgraph/annotations'
-import { equationText } from '#root/plugins/bondgraph/equations'
+import { equationLatex, equationText } from '#root/plugins/bondgraph/equations'
+import {
+    combineParts, fetchAncestors, fetchRhea, netDifferences, netLatex, partLatex, relatedBy
+} from '#root/plugins/bondgraph/rhea'
+import { latexAsSvgString } from '#root/mathjax'
 
 import { notifyChanges } from '#editor/editor'
 
@@ -115,7 +129,7 @@ function plugin(): BondgraphPlugin|undefined {
 
 // the fields as typed
 type ReactionRow = {
-    id: string, key: string, name: string, kind: string, equation: string,
+    id: string, key: string, name: string, kind: string, equation: string, equationSvg: string,
     lumped: boolean, rhea: string, parts: string, sbo: string, uniprot: string
 }
 type SpeciesRow = {
@@ -146,13 +160,61 @@ function partsError(parts: string): string|undefined {
     return bad.length ? `${bad.join(', ')}: ${idError('rhea', bad[0]!)}` : undefined
 }
 
+// a lumped step's parts added up (./rhea.ts): each typeset with what cancels struck through, then the net equation
+type CombinationView = { message?: string, parts: { id: string, svg: string }[], net: string, verdict: string, matches: boolean }
+const combinations = vue.ref<Record<string, CombinationView>>({})
+
+// each piece typeset on its own, so the browser wraps the equation at the panel's width
+function typeset(pieces: string[]): string {
+    return pieces.map(latex => {
+        try { return latexAsSvgString(latex) } catch (error) { return String(error) }
+    }).join(' ')
+}
+
+async function combine(row: ReactionRow) {
+    const ids = row.lumped ? partIds(row.parts).filter(id => !idError('rhea', id)) : []
+    const parts = row.parts
+    if (ids.length < 2) {
+        delete combinations.value[row.id]
+        return
+    }
+    combinations.value[row.id] = { message: `Fetching ${ids.length} Rhea reactions…`, parts: [], net: '', verdict: '', matches: false }
+    let view: CombinationView
+    try {
+        const reactions = await Promise.all(ids.map(id => fetchRhea(id)))
+        const step = plugin()?.reactionEquations().find(eq => eq.id === row.id)
+        const chebiOf = (node: string) => current.get(node)?.chebi
+        const chebis = [...new Set([...reactions.flatMap(r => r.participants.map(p => p.chebi)),
+                                    ...[...(step?.substrates ?? []), ...(step?.products ?? [])].map(p => p.node && chebiOf(p.node))]
+                                   .filter((c): c is string => !!c))]
+        // without the ancestors (the lookup service down), only identical IDs are the same entity
+        const ancestors = new Map(await Promise.all(chebis.map(async c => [c, await fetchAncestors(c).catch(() => [])] as const)))
+        const related = relatedBy(ancestors)
+        const combined = combineParts(reactions, related)
+        const differences = step ? netDifferences(combined.net, step, chebiOf, related) : undefined
+        view = {
+            parts: combined.parts.map(p => ({ id: `RHEA:${p.id}`, svg: typeset(partLatex(p.terms)) })),
+            net: typeset(netLatex(combined.net)),
+            matches: differences?.length === 0,
+            verdict: differences === undefined ? 'Not compared with the step: give each of its species a ChEBI ID.'
+                   : differences.length === 0 ? 'The net equation is the step\'s.'
+                   : `The net equation differs from the step's: ${differences.join('; ')}.`
+        }
+    } catch (error) {
+        view = { message: `Could not add up the parts: ${(error as Error).message}`, parts: [], net: '', verdict: '', matches: false }
+    }
+    if (row.parts === parts) combinations.value[row.id] = view    // unless they were edited meanwhile
+}
+
 function edit(row: ReactionRow, field: 'rhea'|'parts'|'sbo'|'uniprot', value: string) {
     row[field] = value
     changed.value = true
+    if (field === 'parts') combine(row)
 }
 function setLumped(row: ReactionRow, lumped: boolean) {
     row.lumped = lumped
     changed.value = true
+    combine(row)
 }
 function editSpecies(row: SpeciesRow, field: 'chebi'|'go', value: string) {
     row[field] = value
@@ -172,7 +234,7 @@ function refresh() {
     reactions.value = (p?.reactionEquations() ?? []).filter(eq => eq.kind !== 'flow').map((eq, k) => {
         const a = current.get(eq.id) ?? emptyAnnotation()
         return {
-            id: eq.id, key: `r${k}`, name: eq.name, kind: eq.kind, equation: equationText(eq),
+            id: eq.id, key: `r${k}`, name: eq.name, kind: eq.kind, equation: equationText(eq), equationSvg: typeset([equationLatex(eq)]),
             lumped: a.parts.length > 0, rhea: a.rhea ?? '', parts: a.parts.join(', '), sbo: a.sbo ?? '', uniprot: a.uniprot ?? ''
         }
     })
@@ -182,6 +244,8 @@ function refresh() {
     }))
     changed.value = false
     status.value = describe()
+    combinations.value = {}
+    for (const r of reactions.value) combine(r)
 }
 
 function describe(): string {
@@ -258,7 +322,7 @@ vue.onUnmounted(() => {
     color: var(--p-text-muted-color);
     margin: 0 0 10px 0;
 }
-code, .equation {
+code {
     font-family: ui-monospace, monospace;
 }
 .section {
@@ -317,6 +381,39 @@ input[type="text"], select {
     color: var(--p-text-color);
     font-family: ui-monospace, monospace;
     font-size: 0.8rem;
+}
+.combination {
+    margin: 2px 0 6px 0;
+}
+.part {
+    margin-bottom: 4px;
+}
+.part-id {
+    font-family: ui-monospace, monospace;
+    font-size: 0.72rem;
+    color: var(--p-text-muted-color);
+}
+.part.net {
+    border-top: 1px solid var(--p-content-border-color);
+    padding-top: 2px;
+}
+.math {
+    line-height: 1.6;
+}
+.math :deep(svg) {
+    display: inline;
+    max-width: 100%;
+    height: auto;
+}
+.verdict {
+    font-size: 0.78rem;
+    margin: 2px 0 0 0;
+}
+.verdict.matches {
+    color: var(--p-green-600, #2e7d32);
+}
+.verdict.differs {
+    color: var(--p-orange-600, #c05600);
 }
 .links {
     display: flex;
