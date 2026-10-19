@@ -188,3 +188,36 @@
 .tooltip-error > .tippy-box > .tippy-arrow {
     color: var(--editor-tooltip-error);
 }
+
+/* an element's constitutive law in its hover (plugins/bondgraph hoverHtml) */
+.bg-law {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 2px 0;
+}
+.bg-law-equation {
+    font-family: ui-monospace, monospace;
+    font-size: 0.85rem;
+}
+.bg-law-annotation {
+    font-family: ui-monospace, monospace;
+    font-size: 0.8rem;
+    opacity: 0.85;
+}
+.bg-law-label {
+    font-size: 0.75rem;
+    opacity: 0.75;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.bg-law-math svg {
+    max-width: 100%;
+    height: auto;
+}
+.bg-law-where {
+    font-family: ui-monospace, monospace;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}

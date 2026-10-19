@@ -20,6 +20,7 @@ limitations under the License.
 
 import { svgToDataUrl, LatexMathSvg } from '#root/utils/svgUtils'
 
+import { makeLatex } from './laws'
 import type {
     BGComponentDefinition,
     BGLibraryComponentTemplate,
@@ -167,6 +168,14 @@ export const BONDGRAPH_COMPONENT_DEFINITIONS: BGComponentDefinition[] = [
         style: REACTION_STYLE
     },
     {
+        id: 'OneReactionNode',
+        type: 'https://bg-rdf.org/ontologies/bondgraph-framework#OneReactionNode',
+        name: 'One reaction node',
+        numPorts: Infinity,     // a bond for each species (a ChemicalReactionNode)
+        symbol: 'Rx',
+        style: REACTION_STYLE
+    },
+    {
         id: 'TransformNode',
         type: 'https://bg-rdf.org/ontologies/bondgraph-framework#TransformNode',
         name: 'Transform node',
@@ -210,6 +219,7 @@ function typeset(latex: string, style: BGElementStyle, base64: boolean=false): s
             'min-height': ICON_MIN_HEIGHT,
             'vertical-align': ICON_VERTICAL_ALIGN,
             'border-width': style.border ? ICON_BORDER : MIN_BORDER,
+            'border-style': style.borderStyle || 'solid',
             padding: ICON_PADDING,
             'corner-radius': ICON_RADIUS,
             background: style.background,
@@ -219,25 +229,15 @@ function typeset(latex: string, style: BGElementStyle, base64: boolean=false): s
     return svgToDataUrl(svg, base64)
 }
 
-function makeLatex(symbol: string, species: string|undefined,  location: string|undefined): string {
-    const latex: string[] = [symbol]
-    if (species) {
-        latex.push(`^{${species}}`)
-    }
-    if (location) {
-        latex.push(`_{${location}}`)
-    }
-    return latex.join('')
-}
-
 //======================================
 
 export function svgImageData(symbol: string,
                              species: string|undefined,
                              location: string|undefined,
                              elementStyle: BGElementStyle,
-                             fillString?: string): string {
-    const latex = makeLatex(symbol, species, location)
+                             fillString?: string,
+                             lawLabel?: string): string {
+    const latex = makeLatex(symbol, species, location, lawLabel)
     const style = fillString ? Object.assign({}, elementStyle, { background: fillString })
                              : elementStyle
     return typeset(latex, style)

@@ -254,6 +254,23 @@ const menuItems = [
                     emit('edit-action', 'delete')
                 },
                 disabled: !props.editorState.itemSelected
+            },
+            {
+                separator: true
+            },
+            {
+                label: 'Map variables…',
+                icon: 'pi pi-tags',
+                command: () => {
+                    emit('edit-action', 'map-variables')
+                }
+            },
+            {
+                label: 'Annotate reactions and species…',
+                icon: 'pi pi-bookmark',
+                command: () => {
+                    emit('edit-action', 'annotate')
+                }
             }
         ]
     },

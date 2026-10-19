@@ -52,6 +52,7 @@ import type {
     ValueChange
 } from '#root/utils/editor-types'
 import type { Styling } from '#root/utils/styling'
+import type { StepEquation } from './bondgraph/equations'
 
 //==============================================================================
 
@@ -110,6 +111,26 @@ export interface PluginInterface {
      * @param celldlObject A CellDL object.
      */
     statusText: (celldlObject: CellDLObject) => string
+
+    /**
+     * Text to show beside a CellDL object while the pointer is over it (e.g. a reaction's equation); '' for none.
+     *
+     * @param celldlObject A CellDL object.
+     */
+    hoverText?: (celldlObject: CellDLObject) => string
+
+    /**
+     * HTML to show beside a CellDL object while the pointer is over it, in place of its hover text (e.g. an
+     * element's constitutive law); '' for none.
+     *
+     * @param celldlObject A CellDL object.
+     */
+    hoverHtml?: (celldlObject: CellDLObject) => string
+
+    /**
+     * The diagram's reactions (and other steps) as equations, for the reaction equations view.
+     */
+    reactionEquations?: () => StepEquation[]
 
     /**
      * A CellDL component has been added to the diagram.
@@ -346,6 +367,20 @@ export class ComponentLibraryPlugin {
 
     statusText(celldlObject: CellDLObject): string {
         return [...this.#registeredPlugins.values().map(plugin => plugin.statusText(celldlObject))].filter(t => t !== '').join(' ')
+    }
+
+    hoverText(celldlObject: CellDLObject): string {
+        return [...this.#registeredPlugins.values().map(plugin => plugin.hoverText?.(celldlObject) ?? '')]
+                .filter(t => t !== '').join('\n')
+    }
+
+    hoverHtml(celldlObject: CellDLObject): string {
+        return [...this.#registeredPlugins.values().map(plugin => plugin.hoverHtml?.(celldlObject) ?? '')]
+                .filter(t => t !== '').join('')
+    }
+
+    reactionEquations(): StepEquation[] {
+        return [...this.#registeredPlugins.values()].flatMap(plugin => plugin.reactionEquations?.() ?? [])
     }
 
     getObjectTemplate(uri: SubjectType, metadata: MetadataPropertiesMap, rdfStore: MetadataStore): ObjectTemplate|undefined {

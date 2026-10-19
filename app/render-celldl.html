@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="UTF-8" />
+        <title>Render a CellDL spec</title>
+        <style>body { margin: 0; background: white; }</style>
+    </head>
+    <body>
+        <!-- render-celldl.html?spec=<url of a CellDL spec>: the CellDL document is drawn here and left, base64
+             encoded, in <body data-celldl="..."> (scripts/render-celldl.ts reads it) -->
+        <div id="diagram"></div>
+        <script type="module" src="./src/renderCelldl.ts"></script>
+    </body>
+</html>

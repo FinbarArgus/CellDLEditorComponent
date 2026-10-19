@@ -61,6 +61,9 @@ import type { PopoverEventData, ViewState } from '#root/utils/editor-types'
 //import { TestCellDLEditor, testEditor } from '../../tests/editor'
 
 import PropertiesPanel from './panels/PropertiesPanel.vue'
+import ReactionsPanel from './panels/ReactionsPanel.vue'
+import VariablesPanel from './panels/VariablesPanel.vue'
+import AnnotationsPanel from './panels/AnnotationsPanel.vue'
 import StylingPanel from './panels/StylingPanel.vue'
 
 import EditorToolbar from './toolbar/EditorToolbar.vue'
@@ -272,6 +275,24 @@ const panelButtons = vue.ref<EditorToolButton[]>([
         prompt: 'Style',
         icon: 'lucide-Paintbrush',
         panel: vue.markRaw(StylingPanel)
+    },
+    {
+        toolId: PANEL_ID.REACTIONS_PANEL,
+        prompt: 'Reactions',
+        icon: 'lucide-FlaskConical',
+        panel: vue.markRaw(ReactionsPanel)
+    },
+    {
+        toolId: PANEL_ID.VARIABLES_PANEL,
+        prompt: 'Variables',
+        icon: 'lucide-Tags',
+        panel: vue.markRaw(VariablesPanel)
+    },
+    {
+        toolId: PANEL_ID.ANNOTATIONS_PANEL,
+        prompt: 'Annotations',
+        icon: 'lucide-BookMarked',
+        panel: vue.markRaw(AnnotationsPanel)
     }
 ])
 
@@ -334,6 +355,14 @@ vue.watch(
             const options = command.options
             if (options.action === 'clean') {
                 undoRedo.clean()
+            } else if (options.action === 'map-variables') {
+                // open the Variables panel
+                const button = document.getElementById(PANEL_ID.VARIABLES_PANEL)
+                if (button && !button.classList.contains('active')) button.click()
+            } else if (options.action === 'annotate') {
+                // open the Annotations panel
+                const button = document.getElementById(PANEL_ID.ANNOTATIONS_PANEL)
+                if (button && !button.classList.contains('active')) button.click()
             }
         } else if (props.editorCommand?.command === 'set-state') {
             const command = props.editorCommand as EditorSetStateCommand

@@ -51,6 +51,9 @@
         "format:check": "bunx --bun biome format --config-path ./biome.json --max-diagnostics=none",
         "lint": "bunx --bun biome lint --config-path ./biome.json --fix --error-on-warnings --max-diagnostics=none",
         "start": "cd app && bun run build:dev && vite preview",
+        "test": "./scripts/install-bgrdf.sh && bun test tests/unit",
+        "render-celldl": "./scripts/install-bgrdf.sh && bun scripts/render-celldl.ts",
+        "check-reactions": "./scripts/install-bgrdf.sh && bun scripts/check-reactions.ts",
         "version:new": "bun scripts/version.js"
     },
     "dependencies": {
@@ -84,6 +87,7 @@
         "@primevue/auto-import-resolver": "4.2.5",
         "@tailwindcss/postcss": "^4.1.18",
         "@tailwindcss/vite": "^4.1.18",
+        "@types/bun": "^1.4.3",
         "@types/node": "^26.2.0",
         "@types/rbush": "^4.0.0",
         "@types/svg-intersections": "^0.4.4",
