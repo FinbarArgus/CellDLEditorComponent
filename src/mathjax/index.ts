@@ -34,6 +34,7 @@ import '@mathjax/src/js/util/asyncLoad/esm.js'
 
 import '@mathjax/src/js/input/tex/base/BaseConfiguration.js'
 import '@mathjax/src/js/input/tex/ams/AmsConfiguration.js'
+import '@mathjax/src/js/input/tex/cancel/CancelConfiguration.js'
 import '@mathjax/src/js/input/tex/color/ColorConfiguration.js'
 import '@mathjax/src/js/input/tex/mhchem/MhchemConfiguration.js'
 
@@ -50,7 +51,7 @@ RegisterHTMLHandler(adaptor)
 //==============================================================================
 
 const tex = new TeX({
-    packages: ['base', 'ams', 'color', 'mhchem'],
+    packages: ['base', 'ams', 'cancel', 'color', 'mhchem'],
     formatError(_: unknown, error: TexError) {
         throw Error(`LaTeX: ${error.message}`)
     }

@@ -196,10 +196,6 @@
     gap: 6px;
     padding: 2px 0;
 }
-.bg-law-equation {
-    font-family: ui-monospace, monospace;
-    font-size: 0.85rem;
-}
 .bg-law-annotation {
     font-family: ui-monospace, monospace;
     font-size: 0.8rem;
@@ -216,8 +212,11 @@
     height: auto;
 }
 .bg-law-where {
-    font-family: ui-monospace, monospace;
-    font-size: 0.78rem;
-    line-height: 1.45;
-    overflow-wrap: anywhere;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+/* inline, so a line MathJax breaks in pieces (and the baselines it sets) flow as text does */
+.bg-law-line svg {
+    display: inline;
 }

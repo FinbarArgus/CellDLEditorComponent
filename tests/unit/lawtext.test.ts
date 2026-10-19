@@ -5,7 +5,9 @@ import { join } from 'node:path'
 
 import { DOMParser } from '@xmldom/xmldom'
 
-import { type MathNode, mathmlEquations, mathmlLatex, sumText, symbolLatex, whereText } from '../../src/plugins/bondgraph/lawtext'
+import {
+    type MathNode, mathmlEquations, mathmlLatex, sumLatex, sumText, symbolLatex, whereLatex, whereText
+} from '../../src/plugins/bondgraph/lawtext'
 
 const TEMPLATES = join(import.meta.dir, '..', '..', 'BG-RDF', 'templates')
 
@@ -48,7 +50,19 @@ describe('constitutive laws as LaTeX', () => {
         expect(sumText([{ sign: -1, count: 1, name: 'v_HK' }, { sign: 1, count: 3, name: 'v_PK' }])).toBe('−v_HK + 3·v_PK')
         expect(sumText([{ sign: 1, count: -48242.666, name: 'u_C_m' }])).toBe('−48242.7·u_C_m')
         expect(sumText([])).toBe('0')
-        expect(whereText([{ symbol: 'u_f', name: 'A_f_HK', is: 'mu_Glc_c' }, { symbol: 'kappa', name: 'kappa_HK' }]))
+        expect(whereText([{ symbol: 'u_f', name: 'A_f_HK', is: [{ sign: 1, count: 1, name: 'mu_Glc_c' }] },
+                          { symbol: 'kappa', name: 'kappa_HK' }]))
             .toEqual(['u_f = A_f_HK = mu_Glc_c', 'kappa = kappa_HK'])
+    })
+
+    test('the hover\'s lines typeset as the law is, in math rather than text', () => {
+        expect(sumLatex([{ sign: 1, count: 2, name: 'mu_ADP_c' }, { sign: 1, count: 1, name: 'mu_Pi_c' }]))
+            .toBe('2\\,\\mu_{\\mathrm{ADP\\_c}} + \\mu_{\\mathrm{Pi\\_c}}')
+        expect(sumLatex([{ sign: -1, count: 1, name: 'v_HK' }, { sign: 1, count: -48242.666, name: 'u_C_m' }]))
+            .toBe('-v_{\\mathrm{HK}} - 48242.7\\,u_{\\mathrm{C\\_m}}')
+        expect(sumLatex([])).toBe('0')
+        expect(whereLatex([{ symbol: 'u_f', name: 'A_f_HK', is: [{ sign: 1, count: 1, name: 'mu_Glc_c' }] },
+                           { symbol: 'kappa', name: 'kappa_HK' }]))
+            .toEqual(['u_{f} = A_{\\mathrm{f\\_HK}} = \\mu_{\\mathrm{Glc\\_c}}', '\\kappa = \\kappa_{\\mathrm{HK}}'])
     })
 })

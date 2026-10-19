@@ -124,26 +124,49 @@ export interface LawTerm {
     name: string                // the CellML name of the variable it brings
 }
 
+export interface SignedTerm extends LawTerm {
+    sign: number                // +1 or -1
+}
+
+function magnitudeText(count: number): string {
+    return Number.isInteger(count) ? `${Math.abs(count)}` : Math.abs(count).toPrecision(6)
+}
+
 /** a + 2 b - c, from signed terms (a count of 1 is left out). */
-export function sumText(terms: { sign: number, count: number, name: string }[]): string {
+export function sumText(terms: SignedTerm[]): string {
     if (terms.length === 0) return '0'
     return terms.map((t, k) => {
-        const magnitude = Math.abs(t.count) === 1 ? t.name
-                        : `${Number.isInteger(t.count) ? Math.abs(t.count) : Math.abs(t.count).toPrecision(6)}·${t.name}`
+        const magnitude = Math.abs(t.count) === 1 ? t.name : `${magnitudeText(t.count)}·${t.name}`
         const negative = t.sign * Math.sign(t.count) < 0
         return k === 0 ? (negative ? `−${magnitude}` : magnitude) : `${negative ? ' − ' : ' + '}${magnitude}`
+    }).join('')
+}
+
+/** sumText as LaTeX, each name typeset by symbolLatex. */
+export function sumLatex(terms: SignedTerm[]): string {
+    if (terms.length === 0) return '0'
+    return terms.map((t, k) => {
+        const symbol = symbolLatex(t.name)
+        const magnitude = Math.abs(t.count) === 1 ? symbol : `${magnitudeText(t.count)}\\,${symbol}`
+        const negative = t.sign * Math.sign(t.count) < 0
+        return k === 0 ? (negative ? `-${magnitude}` : magnitude) : `${negative ? ' - ' : ' + '}${magnitude}`
     }).join('')
 }
 
 export interface WhereLine {
     symbol: string              // the template's name (u_f, v, K, ...)
     name: string                // the CellML name
-    is?: string                 // what it equals in the model, from the bonds
+    is?: SignedTerm[]           // what it equals in the model, from the bonds
 }
 
 /** "u_f = mu_Glc_c + mu_ATP_c" style lines, one per symbol, its CellML name and what the bonds make it. */
 export function whereText(lines: WhereLine[]): string[] {
-    return lines.map(l => l.is ? `${l.symbol} = ${l.name} = ${l.is}` : `${l.symbol} = ${l.name}`)
+    return lines.map(l => l.is ? `${l.symbol} = ${l.name} = ${sumText(l.is)}` : `${l.symbol} = ${l.name}`)
+}
+
+/** whereText's lines as LaTeX. */
+export function whereLatex(lines: WhereLine[]): string[] {
+    return lines.map(l => [symbolLatex(l.symbol), symbolLatex(l.name), ...(l.is ? [sumLatex(l.is)] : [])].join(' = '))
 }
 
 //==============================================================================

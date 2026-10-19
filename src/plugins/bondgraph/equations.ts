@@ -76,15 +76,47 @@ function sideText(side: Participant[]): string {
     return side.length ? side.map(participantText).join(' + ') : '∅'
 }
 
+/** "moves 2 charges into [m]", for a step that moves charge across a membrane, else ''. */
+export function chargeText(eq: StepEquation): string {
+    if (!eq.charge || eq.charge.count === 0) return ''
+    const n = Math.abs(eq.charge.count)
+    const where = eq.charge.location ? ` ${eq.charge.count > 0 ? 'into' : 'out of'} [${eq.charge.location}]` : ''
+    return `moves ${n} charge${n === 1 ? '' : 's'}${where}`
+}
+
 /** The equation as text: substrates, the step's arrow, products, and any charge it moves across a membrane. */
 export function equationText(eq: StepEquation): string {
     const text = `${sideText(eq.substrates)} ${ARROWS[eq.kind]} ${sideText(eq.products)}`
-    if (eq.charge && eq.charge.count !== 0) {
-        const n = Math.abs(eq.charge.count)
-        const where = eq.charge.location ? ` ${eq.charge.count > 0 ? 'into' : 'out of'} [${eq.charge.location}]` : ''
-        return `${text}   (moves ${n} charge${n === 1 ? '' : 's'}${where})`
-    }
-    return text
+    const charge = chargeText(eq)
+    return charge ? `${text}   (${charge})` : text
+}
+
+const LATEX_ARROWS: Record<StepKind, string> = { reaction: '\\rightleftharpoons', transport: '\\leftrightarrows', flow: '\\leftrightarrows' }
+
+// MathJax's \text is literal but for braces, backslashes and $, which are set in math mode instead
+const TEXT_SPECIALS: Record<string, string> = { '{': '\\{', '}': '\\}', '\\': '\\backslash ', $: '\\$' }
+
+/** A label as upright LaTeX: \mathrm for a plain name, else \text. */
+export function labelLatex(label: string): string {
+    if (/^[A-Za-z0-9]+$/.test(label)) return `\\mathrm{${label}}`
+    return label.split(/([{}\\$])/).filter(Boolean)
+                .map(part => TEXT_SPECIALS[part] ?? `\\text{${part}}`).join('')
+}
+
+export function participantLatex(p: Participant): string {
+    const coefficient = p.count === 1 ? '' : `${p.count}\\,`
+    return `${coefficient}${labelLatex(p.species)}${p.location ? `[${labelLatex(p.location)}]` : ''}`
+}
+
+function sideLatex(side: Participant[]): string {
+    return side.length ? side.map(participantLatex).join(' + ') : '\\varnothing'
+}
+
+/** equationText as LaTeX. */
+export function equationLatex(eq: StepEquation): string {
+    const latex = `${sideLatex(eq.substrates)} ${LATEX_ARROWS[eq.kind]} ${sideLatex(eq.products)}`
+    const charge = chargeText(eq)
+    return charge ? `${latex}\\qquad ${labelLatex(`(${charge})`)}` : latex
 }
 
 /** True when both sides hold the same species in the same amounts, at least one of them in another compartment. */

@@ -215,16 +215,19 @@ const scenario = (src: string) => `(async () => {
     const reactionStep = steps().find(e => e.kind === 'reaction' && e.substrates.some(p => p.node))
     const reactionHover = hoverOf(reactionStep.id)
     const substrateNames = reactionStep.substrates.filter(p => p.node).map(p => named().get(p.node + '|u'))
-    const forward = (reactionHover.match(/u_f = [^<]*/) ?? [''])[0]
+    const forward = (reactionHover.match(/data-text="u_f = [^"]*/) ?? [''])[0]
     check('a reaction\\'s hover shows its law and the potentials bonded to its forward side',
           reactionHover.includes('<svg') && substrateNames.every(n => forward.includes(n)), forward)
     const storeNode = plugin.speciesNodes().find(n => !n.isSource)
     const storeHover = storeNode ? hoverOf(storeNode.id) : ''
     const feeding = steps().filter(e => [...e.substrates, ...e.products].some(p => p.node === storeNode?.id))
                            .map(e => named().get(e.id + '|v'))
-    const flowLine = (storeHover.match(/(^|>)v = [^<]*/) ?? [''])[0]
+    const flowLine = (storeHover.match(/data-text="v = [^"]*/) ?? [''])[0]
     check('a store\\'s hover shows its law and the flows of its reactions', storeHover.includes('<svg') && feeding.length > 0
           && feeding.every(n => flowLine.includes(n)), flowLine)
+    const hoverLines = new DOMParser().parseFromString(reactionHover, 'text/html').querySelectorAll('.bg-law-line')
+    check('a reaction\\'s equation and symbols are typeset in the hover, as its law is',
+          hoverLines.length > 1 && [...hoverLines].every(l => l.querySelector('svg')), hoverLines.length)
 
     // the Variables panel: choose a convention and apply it; it is saved with the document
     document.getElementById('variables-panel').click()
@@ -256,6 +259,8 @@ const scenario = (src: string) => `(async () => {
     check('the Annotations panel lists every reaction and species', reactionRows().length === reactionSteps.length
           && speciesRows().length === speciesKeys.size && reactionRows().length > 0,
           reactionRows().length + ' reactions, ' + speciesRows().length + ' species')
+    check('each reaction\\'s equation is typeset', reactionRows().every(r => r.querySelector('.equation svg')),
+          reactionRows().filter(r => !r.querySelector('.equation svg')).map(r => r.dataset.element))
     const type = (row, selector, value) => {
         const input = row.querySelector(selector)
         input.value = value
@@ -309,6 +314,23 @@ const scenario = (src: string) => `(async () => {
     type(annotatedRow(), 'input.rhea', '17825')
     type(speciesRow(), 'input.go', '0005829')
     await applyAnnotations()
+    // a lumped step: its Rhea parts (fetched live) typeset one under another, what cancels struck through, then the net
+    const lumpedRow = reactionRows()[1]
+    if (lumpedRow) {
+        const lumpedBox = lumpedRow.querySelector('input.lumped')
+        lumpedBox.checked = true
+        lumpedBox.dispatchEvent(new Event('change'))
+        await wait(100)
+        type(lumpedRow, 'input.parts', '17825, 11816')
+        const shownParts = () => lumpedRow.querySelectorAll('.combination .part')
+        for (let i = 0; i < 150 && !lumpedRow.querySelector('.combination .verdict'); i += 1) await wait(100)
+        const struck = [...shownParts()].filter(p => p.querySelector('[data-mml-node="menclose"]')).length
+        check('a lumped step\\'s parts are typeset with what cancels struck through, then the net equation',
+              shownParts().length === 3 && struck === 2 && !!lumpedRow.querySelector('.combination .verdict'),
+              shownParts().length + ' rows, ' + struck + ' struck; '
+              + (lumpedRow.querySelector('.combination')?.textContent ?? 'no combination'))
+        lumpedRow.scrollIntoView()      // typed, not applied: shown in the screenshot, not saved
+    }
     const annotationTriples = tripleRows()
     return { checks, document: await diagram.serialise(), names, asOpened, annotationTriples }
 })()`
