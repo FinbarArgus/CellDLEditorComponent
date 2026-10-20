@@ -15,6 +15,18 @@
                         span.name {{ r.name }}
                         span.kind {{ r.kind }}
                     .equation.math(v-html="r.equationSvg" :data-text="r.equation")
+                    //- a lumped step: Rhea's net equation under the step's to compare, then the parts it adds up
+                    .combination(v-if="r.lumped && combinations[r.id]" :data-element="r.id")
+                        p.note(v-if="combinations[r.id].message") {{ combinations[r.id].message }}
+                        template(v-else)
+                            .part.net
+                                .part-id Rhea net
+                                .math(v-html="combinations[r.id].net")
+                            p.verdict(:class="combinations[r.id].matches ? 'matches' : 'differs'") {{ combinations[r.id].verdict }}
+                            .parts
+                                .part(v-for="part in combinations[r.id].parts" :key="part.id")
+                                    .part-id {{ part.id }}
+                                    .math(v-html="part.svg")
                     label.check
                         input.lumped(type="checkbox" :checked="r.lumped" @change="setLumped(r, checked($event))")
                         | Lumped: parts
@@ -37,16 +49,6 @@
                             a.link(v-for="id in partIds(r.parts)" :key="id" :href="identifierLink('rhea', id)"
                                    target="_blank" rel="noopener") {{ id }}
                         .error(v-if="partsError(r.parts)") {{ partsError(r.parts) }}
-                        .combination(v-if="combinations[r.id]" :data-element="r.id")
-                            p.note(v-if="combinations[r.id].message") {{ combinations[r.id].message }}
-                            template(v-else)
-                                .part(v-for="part in combinations[r.id].parts" :key="part.id")
-                                    .part-id {{ part.id }}
-                                    .math(v-html="part.svg")
-                                .part.net
-                                    .part-id net
-                                    .math(v-html="combinations[r.id].net")
-                                p.verdict(:class="combinations[r.id].matches ? 'matches' : 'differs'") {{ combinations[r.id].verdict }}
                     .row
                         label(:for="`sbo-${r.key}`") Type
                         select.sbo(:id="`sbo-${r.key}`" :value="r.sbo" :aria-label="`SBO type of ${r.name}`"
@@ -393,9 +395,10 @@ input[type="text"], select {
     font-size: 0.72rem;
     color: var(--p-text-muted-color);
 }
-.part.net {
-    border-top: 1px solid var(--p-content-border-color);
-    padding-top: 2px;
+.parts {
+    border-top: 1px dashed var(--p-content-border-color);
+    margin-top: 4px;
+    padding-top: 4px;
 }
 .math {
     line-height: 1.6;

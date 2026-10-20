@@ -5,6 +5,17 @@
         :style="panelStyle"
     )
         slot
+        .panel-resizer(
+            v-if="type === 'panel'"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Drag to resize the panel"
+            tabindex="0"
+            @pointerdown="startResize"
+            @dblclick="resetWidth"
+            @keydown.left.prevent="nudgeWidth(20)"
+            @keydown.right.prevent="nudgeWidth(-20)"
+        )
     .ci.tool-button(
         :id="toolId"
         :class="buttonClasses"
@@ -26,6 +37,8 @@ import * as vue from 'vue'
 import * as LucideIcons from '@lucide/vue'
 
 import type { PropertyGroup } from '#root/utils/editor-types'
+
+import { clampPanelWidth, MIN_PANEL_WIDTH, panelWidth, savePanelWidth } from './panelWidth'
 
 const props = defineProps<{
     toolId: string
@@ -81,7 +94,37 @@ const panelStyle = vue.computed(() => {
     if (props.type==='popover') {
        return { top: popoverTop.value }
    }
+    return { width: `${clampPanelWidth(panelWidth.value, window.innerWidth)}px` }
 })
+
+// a panel is widened by dragging its left edge, the width shared by every panel and kept between visits
+function startResize(event: PointerEvent) {
+    const handle = event.currentTarget as HTMLElement
+    const startX = event.clientX
+    const startWidth = panelWidth.value
+    try { handle.setPointerCapture(event.pointerId) } catch {}     // not for a pointer that isn't down
+    const move = (e: PointerEvent) => {
+        panelWidth.value = clampPanelWidth(startWidth + startX - e.clientX, window.innerWidth)
+    }
+    const end = () => {
+        handle.removeEventListener('pointermove', move)
+        handle.removeEventListener('pointerup', end)
+        handle.removeEventListener('pointercancel', end)
+        savePanelWidth(panelWidth.value)
+    }
+    handle.addEventListener('pointermove', move)
+    handle.addEventListener('pointerup', end)
+    handle.addEventListener('pointercancel', end)
+    event.preventDefault()
+}
+function resetWidth() {
+    panelWidth.value = MIN_PANEL_WIDTH
+    savePanelWidth(panelWidth.value)
+}
+function nudgeWidth(delta: number) {
+    panelWidth.value = clampPanelWidth(panelWidth.value + delta, window.innerWidth)
+    savePanelWidth(panelWidth.value)
+}
 
 const pointerPos = vue.ref<number>()
 vue.provide('pointerPos', vue.readonly(pointerPos))
@@ -206,13 +249,26 @@ async function toolButtonClick(e: MouseEvent) {
 }
 
 .panel {
-    width: 250px;
     border: 2px solid var(--editor-border-color);
     border-left-width: 1px;
     right: 38px; /* This depends on panel bar width... */
     top: 1.8em;
     bottom: 1.6em;
     position: absolute;
+}
+.panel-resizer {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -4px;
+    width: 8px;
+    cursor: ew-resize;
+    touch-action: none;
+    z-index: 1;
+}
+.panel-resizer:hover, .panel-resizer:focus-visible {
+    background: color-mix(in srgb, #66aaff 45%, transparent);
+    outline: none;
 }
 .popover {
     position: absolute;
