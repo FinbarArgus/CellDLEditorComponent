@@ -188,3 +188,35 @@
 .tooltip-error > .tippy-box > .tippy-arrow {
     color: var(--editor-tooltip-error);
 }
+
+/* an element's constitutive law in its hover (plugins/bondgraph hoverHtml) */
+.bg-law {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 2px 0;
+}
+.bg-law-annotation {
+    font-family: ui-monospace, monospace;
+    font-size: 0.8rem;
+    opacity: 0.85;
+}
+.bg-law-label {
+    font-size: 0.75rem;
+    opacity: 0.75;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.bg-law-math svg {
+    max-width: 100%;
+    height: auto;
+}
+.bg-law-where {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+/* inline, so a line MathJax breaks in pieces (and the baselines it sets) flow as text does */
+.bg-law-line svg {
+    display: inline;
+}

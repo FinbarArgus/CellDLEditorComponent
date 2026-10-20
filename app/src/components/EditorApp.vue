@@ -116,7 +116,7 @@ import '../assets/app.css'
 
 import AboutDialog from './dialogs/AboutDialog.vue'
 
-import { SHORT_DELAY } from '../utils/constants'
+import { OPEN_URL_DELAY, SHORT_DELAY } from '../utils/constants'
 import { isCompatibleBrowser } from '../utils/common'
 import * as version from '../utils/version'
 import * as vueCommon from '../utils/vueCommon'
@@ -147,6 +147,13 @@ const loadingMessage = vue.ref<string>('Loading CellDL editor');
     if (editorInitialised()) {
         loadingMessage.value = ''
         console.log('Editor ready...')
+
+        // Open the CellDL file at `?open=<url>`, if given (e.g. a link to a diagram), once the editor
+        // component has mounted
+        const openUrl = new URLSearchParams(window.location.search).get('open')
+        if (openUrl) {
+            setTimeout(() => { openUrlFile(openUrl) }, OPEN_URL_DELAY)
+        }
 
         // Now start checking for a newer version of the editor
         version.startCheck()
@@ -264,6 +271,26 @@ vue.onMounted(() => {
         }
     }, SHORT_DELAY)
 })
+
+async function openUrlFile(url: string) {
+    const response = await fetch(url)
+    if (!response.ok) {
+        onError(`Cannot open ${url}: ${response.status} ${response.statusText}`)
+        return
+    }
+    const name = decodeURIComponent(url.split('/').pop() || url)
+    editorCommand.value = {
+        command: 'file',
+        options: {
+            action: 'open',
+            data: await response.text(),
+            name: name
+        }
+    }
+    fileStatus.value.haveData = true
+    diagramModified(false)
+    windowTitle.value = name
+}
 
 //==============================================================================
 //==============================================================================

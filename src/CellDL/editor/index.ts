@@ -347,6 +347,9 @@ export class CellDLEditor {
         // Initialise alignment guides and grid
         editGuides.newDiagram(celldlDiagram, DEFAULT_VIEW_STATE)
 
+        // e.g. for its regions to be drawn
+        document.dispatchEvent(new CustomEvent('diagram-opened'))
+
         // Show the diagram in the editor's window
         if (this.#container) {
             this.#container.appendChild(this.#svgDiagram!)
@@ -516,10 +519,12 @@ export class CellDLEditor {
         }
     }
 
-    showTooltip(msg: string, style: string = '') {
+    showTooltip(msg: string, style: string = '', html: boolean = false) {
         if (msg === '') {
             this.#hideTooltip()
         } else if (this.#tooltip) {
+            // HTML only from plugins (an element's typeset law), never from user text unescaped
+            this.#tooltip.value.setProps({ allowHTML: html, maxWidth: html ? 640 : 350 })
             this.#tooltip.value.setContent(msg)
             this.#tooltip.value.show()
             if (this.#tooltipElement) {
@@ -880,6 +885,18 @@ export class CellDLEditor {
                 }
                 currentObject.initialiseMove(element)  // will set moveable
                 this.currentObject = currentObject
+                // e.g. an element's constitutive law, else a reaction's equation
+                const hoverHtml = componentLibraryPlugin.hoverHtml(currentObject)
+                const hoverText = hoverHtml === '' ? componentLibraryPlugin.hoverText(currentObject) : ''
+                if (hoverHtml !== '') {
+                    this.showTooltip(hoverHtml, '', true)
+                } else if (hoverText !== '') {
+                    this.showTooltip(hoverText)
+                } else {
+                    this.#hideTooltip()
+                }
+            } else {
+                this.#hideTooltip()
             }
         }
     }
