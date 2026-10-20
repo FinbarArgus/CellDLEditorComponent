@@ -22,10 +22,11 @@
                             .part.net
                                 .part-id Rhea net
                                 .math(v-html="combinations[r.id].net")
-                            p.verdict(:class="combinations[r.id].matches ? 'matches' : 'differs'") {{ combinations[r.id].verdict }}
+                            p.verdict(:class="combinations[r.id].status") {{ combinations[r.id].verdict }}
+                            p.note.is-a(v-for="note in combinations[r.id].notes" :key="note") {{ note }}
                             .parts
                                 .part(v-for="part in combinations[r.id].parts" :key="part.id")
-                                    .part-id {{ part.id }}
+                                    .part-id {{ part.id }}#[span.use(v-if="part.use")  · {{ part.use }}]
                                     .math(v-html="part.svg")
                     label.check
                         input.lumped(type="checkbox" :checked="r.lumped" @change="setLumped(r, checked($event))")
@@ -110,7 +111,7 @@ import {
 } from '#root/plugins/bondgraph/annotations'
 import { equationLatex, equationText } from '#root/plugins/bondgraph/equations'
 import {
-    combineParts, fetchAncestors, fetchRhea, netDifferences, netLatex, partLatex, relatedBy
+    combineParts, fetchAncestors, fetchRhea, netLatex, orientPart, partLatex, relatedBy, stepTerms, verifyReaction
 } from '#root/plugins/bondgraph/rhea'
 import { latexAsSvgString } from '#root/mathjax'
 
@@ -162,8 +163,20 @@ function partsError(parts: string): string|undefined {
     return bad.length ? `${bad.join(', ')}: ${idError('rhea', bad[0]!)}` : undefined
 }
 
-// a lumped step's parts added up (./rhea.ts): each typeset with what cancels struck through, then the net equation
-type CombinationView = { message?: string, parts: { id: string, svg: string }[], net: string, verdict: string, matches: boolean }
+// a lumped step's parts added up as the module library's check does (./rhea.ts): each in the direction and number
+// the step uses it, typeset with what cancels struck through, then the net equation and the verdict
+type CombinationView = {
+    message?: string, parts: { id: string, use: string, svg: string }[], net: string, verdict: string,
+    status: 'match' | 'warn' | 'differs' | 'unknown', notes: string[]
+}
+
+// how the step uses a part: reversed, a multiple, or not at all
+function partUse(multiplier: number): string {
+    if (multiplier === 0) return 'not needed'
+    const times = Math.abs(multiplier)
+    const scale = times === 1 ? '' : `×${Number.isInteger(times) ? times : times.toFixed(3).replace(/0+$/, '')}`
+    return [multiplier < 0 ? 'reversed' : '', scale].filter(Boolean).join(', ')
+}
 const combinations = vue.ref<Record<string, CombinationView>>({})
 
 // each piece typeset on its own, so the browser wraps the equation at the panel's width
@@ -180,7 +193,8 @@ async function combine(row: ReactionRow) {
         delete combinations.value[row.id]
         return
     }
-    combinations.value[row.id] = { message: `Fetching ${ids.length} Rhea reactions…`, parts: [], net: '', verdict: '', matches: false }
+    combinations.value[row.id] = { message: `Fetching ${ids.length} Rhea reactions…`, parts: [], net: '', verdict: '',
+                                   status: 'unknown', notes: [] }
     let view: CombinationView
     try {
         const reactions = await Promise.all(ids.map(id => fetchRhea(id)))
@@ -192,18 +206,28 @@ async function combine(row: ReactionRow) {
         // without the ancestors (the lookup service down), only identical IDs are the same entity
         const ancestors = new Map(await Promise.all(chebis.map(async c => [c, await fetchAncestors(c).catch(() => [])] as const)))
         const related = relatedBy(ancestors)
-        const combined = combineParts(reactions, related)
-        const differences = step ? netDifferences(combined.net, step, chebiOf, related) : undefined
+        const verified = step ? verifyReaction(reactions, stepTerms(step, chebiOf), related) : undefined
+        const multipliers = verified?.multipliers ?? reactions.map(() => 1)
+        const used = reactions.map((r, i) => orientPart(r, multipliers[i]!))
+        const combined = combineParts(used.filter((_, i) => multipliers[i] !== 0), related)
+        const shown = new Map(combined.parts.map(p => [p.id, p.terms]))
         view = {
-            parts: combined.parts.map(p => ({ id: `RHEA:${p.id}`, svg: typeset(partLatex(p.terms)) })),
+            parts: used.map((r, i) => ({
+                id: `RHEA:${r.id}`, use: verified ? partUse(multipliers[i]!) : '',
+                // a part not needed is drawn as Rhea writes it, nothing struck through
+                svg: typeset(partLatex(shown.get(r.id) ?? reactions[i]!.participants.map(p => ({ ...p, cancelled: 0 }))))
+            })),
             net: typeset(netLatex(combined.net)),
-            matches: differences?.length === 0,
-            verdict: differences === undefined ? 'Not compared with the step: give each of its species a ChEBI ID.'
-                   : differences.length === 0 ? 'The net equation is the step\'s.'
-                   : `The net equation differs from the step's: ${differences.join('; ')}.`
+            status: verified?.status ?? 'unknown',
+            notes: verified?.notes ?? [],
+            verdict: !verified ? 'Not compared with the step: give each of its species a ChEBI ID.'
+                   : verified.status === 'match' ? `Rhea's net equation is the step's: it ${verified.text}.`
+                   : verified.status === 'warn' ? `Rhea's net equation ${verified.text}.`
+                   : `Rhea's net equation differs from the step's: ${verified.text}.`
         }
     } catch (error) {
-        view = { message: `Could not add up the parts: ${(error as Error).message}`, parts: [], net: '', verdict: '', matches: false }
+        view = { message: `Could not add up the parts: ${(error as Error).message}`, parts: [], net: '', verdict: '',
+                 status: 'unknown', notes: [] }
     }
     if (row.parts === parts) combinations.value[row.id] = view    // unless they were edited meanwhile
 }
@@ -412,11 +436,20 @@ input[type="text"], select {
     font-size: 0.78rem;
     margin: 2px 0 0 0;
 }
-.verdict.matches {
+.verdict.match {
     color: var(--p-green-600, #2e7d32);
 }
+.verdict.warn {
+    color: var(--p-amber-700, #9a6700);
+}
 .verdict.differs {
-    color: var(--p-orange-600, #c05600);
+    color: var(--p-red-600, #c62828);
+}
+.verdict.unknown {
+    color: var(--p-text-muted-color);
+}
+.use {
+    font-family: var(--p-font-family, sans-serif);
 }
 .links {
     display: flex;
