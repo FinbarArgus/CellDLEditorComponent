@@ -18,11 +18,17 @@ limitations under the License.
 
 ******************************************************************************/
 
-// A lumped step's Rhea reactions (bqbiol:hasPart, ./annotations.ts) added up: each part's equation from Rhea's REST
-// API, what cancels between the parts (the same ChEBI entity, on the same side of a membrane, made by one part and
-// used by another), and the net equation, compared with the step's own (its species' ChEBI IDs). Two ChEBI IDs are
-// the same entity when one is the other or is_a the other (Rhea's alpha-D-glucose 6-phosphate is a D-glucose
-// 6-phosphate), from the ancestors the EBI's Ontology Lookup Service gives.
+// A lumped step's Rhea reactions (bqbiol:hasPart, ./annotations.ts) added up and compared with the step, by the
+// rules of the module library's bondgraph_reactions_test (cam_testing/bondgraph.py), which this mirrors:
+// - each part's equation comes from Rhea's REST API;
+// - each part takes the multiplier (either sign, so either direction) that a least-squares fit to the step's
+//   stoichiometry gives, over every participant but H+ and H2O, rounded to a fraction with denominator at most 12;
+// - a polymer ([glucosyl](n) on one side, (n-1) or (n+1) on the other) counts the units it gains;
+// - the net equation must equal k times the step's for one common factor k (k < 0: the step runs it reversed); a
+//   difference only in H+ or H2O is a warning, unless they are all a reaction has;
+// - Rhea's in and out are read as whichever of the step's compartments fits best.
+// Two ChEBI IDs are the same entity when one is the other or is_a the other (Rhea's alpha-D-glucose 6-phosphate is
+// a D-glucose 6-phosphate), from the ancestors the EBI's Ontology Lookup Service gives.
 
 import { labelLatex, type StepEquation } from './equations'
 
@@ -37,6 +43,7 @@ export interface RheaParticipant {
     name: string                // as Rhea writes it (H2O, ATP(4-), ...)
     chebi?: string              // without its CHEBI: prefix
     location?: 'in' | 'out'     // a transport's side of the membrane
+    polymer?: string            // a polymer's index: n, n+1, n-1
 }
 
 export interface RheaReaction {
@@ -53,12 +60,13 @@ export function parseRheaEquation(id: string, equation: string, chebis: string[]
     const participants: RheaParticipant[] = []
     equation.split(' = ').forEach((text, k) => {
         for (const term of text.split(' + ')) {
-            const [, coefficient, name, , location] = TERM.exec(term.trim()) ?? []
+            const [, coefficient, name, polymer, location] = TERM.exec(term.trim()) ?? []
             participants.push({
                 side: k === 0 ? 'L' : 'R',
                 count: coefficient && coefficient !== 'n' ? Number(coefficient) : 1,
                 name: name ?? term.trim(),
-                location: location as RheaParticipant['location']
+                location: location as RheaParticipant['location'],
+                ...(polymer ? { polymer } : {})
             })
         }
     })
@@ -149,10 +157,22 @@ export interface Combination {
     net: RheaParticipant[]      // what is left, substrates (L) then products (R)
 }
 
-/** The parts added up: an amount one part makes and another uses cancels, the rest is the net equation. */
+/** A part as the step uses it: its sides swapped for a negative multiplier, its counts scaled. */
+export function orientPart(reaction: RheaReaction, multiplier: number): RheaReaction {
+    const scale = Math.abs(multiplier)
+    return { ...reaction, participants: reaction.participants.map(p => ({
+        ...p, side: multiplier < 0 ? (p.side === 'L' ? 'R' : 'L') : p.side, count: p.count * scale
+    })) }
+}
+
+/**
+ * The parts added up: an amount one part makes and another uses cancels, the rest is the net equation. A polymer's
+ * terms of different index ([glucosyl](n), [glucosyl](n-1)) are kept apart, as Rhea writes them.
+ */
 export function combineParts(reactions: RheaReaction[], related: Related = identical): Combination {
     const representative = representatives(related)
-    const keyOf = (p: RheaParticipant) => `${p.chebi ? representative(p.chebi) : `?${p.name}`}|${p.location ?? ''}`
+    const keyOf = (p: RheaParticipant) =>
+        `${p.chebi ? representative(p.chebi) : `?${p.name}`}|${p.location ?? ''}|${p.polymer ?? ''}`
     const made = new Map<string, number>()
     const used = new Map<string, number>()
     for (const p of reactions.flatMap(r => r.participants)) {
@@ -183,7 +203,9 @@ export function combineParts(reactions: RheaReaction[], related: Related = ident
             if (seen.has(key)) continue
             seen.add(key)
             const count = side === 'R' ? (made.get(key) ?? 0) - (used.get(key) ?? 0) : (used.get(key) ?? 0) - (made.get(key) ?? 0)
-            if (count > 0) net.push({ side, count, name: p.name, chebi: p.chebi, location: p.location })
+            if (count > 1e-9) {
+                net.push({ side, count, name: p.name, chebi: p.chebi, location: p.location, ...(p.polymer ? { polymer: p.polymer } : {}) })
+            }
         }
     }
     return { parts, net }
@@ -191,11 +213,18 @@ export function combineParts(reactions: RheaReaction[], related: Related = ident
 
 //==============================================================================
 
+// a count as LaTeX: an integer, or a fraction with denominator at most 12
+function countLatex(count: number): string {
+    const [p, q] = simpleFraction(count, COUNT_DENOMINATOR)
+    return q === 1 ? `${p}` : `\\tfrac{${p}}{${q}}`
+}
+
 function termLatex(p: RheaParticipant, cancelled = 0): string {
-    const name = `${labelLatex(p.name)}${p.location ? labelLatex(`(${p.location})`) : ''}`
-    if (cancelled >= p.count) return `\\cancel{${p.count === 1 ? '' : `${p.count}\\,`}${name}}`
-    if (cancelled > 0) return `\\cancelto{${p.count - cancelled}}{${p.count}}\\,${name}`
-    return `${p.count === 1 ? '' : `${p.count}\\,`}${name}`
+    const name = `${labelLatex(p.name)}${p.polymer ? labelLatex(`(${p.polymer})`) : ''}${p.location ? labelLatex(`(${p.location})`) : ''}`
+    const coefficient = (n: number) => Math.abs(n - 1) < 1e-9 ? '' : `${countLatex(n)}\\,`
+    if (cancelled >= p.count - 1e-9) return `\\cancel{${coefficient(p.count)}${name}}`
+    if (cancelled > 1e-9) return `\\cancelto{${countLatex(p.count - cancelled)}}{${countLatex(p.count)}}\\,${name}`
+    return `${coefficient(p.count)}${name}`
 }
 
 // an equation's pieces (terms, + and the arrow) as LaTeX, to be typeset one by one so a narrow panel can wrap them
@@ -219,40 +248,254 @@ export function netLatex(net: RheaParticipant[]): string[] {
 
 //==============================================================================
 
-function amountText(count: number): string {
-    return count > 0 ? `makes ${count}` : count < 0 ? `uses ${-count}` : 'none'
+// ---- the module library's comparison, mirrored -----------------------------------------------------------------
+
+export const H_PLUS = '15378'
+export const WATER = '15377'
+const SOFT = new Set([H_PLUS, WATER])
+const TOLERANCE = 1e-9
+
+/**
+ * The fraction p/q nearest x with q at most maxDenominator, as [p, q]: 12 for a part's multiplier, as the module
+ * library rounds it; a sum of such multiples needs more.
+ */
+export function simpleFraction(x: number, maxDenominator = 12): [number, number] {
+    let best: [number, number] = [Math.round(x), 1]
+    for (let q = 2; q <= maxDenominator; q += 1) {
+        const p = Math.round(x * q)
+        if (Math.abs(x - p / q) < Math.abs(x - best[0] / best[1]) - TOLERANCE) best = [p, q]
+    }
+    return best
+}
+
+// denominators of a count: a sum of counts times multipliers with denominators up to 12 (their LCM is 27720)
+const COUNT_DENOMINATOR = 27720
+
+function roundFraction(x: number): number {
+    const [p, q] = simpleFraction(x)
+    return p / q
+}
+
+function amountText(x: number): string {
+    const [p, q] = simpleFraction(Math.abs(x), COUNT_DENOMINATOR)
+    return q === 1 ? `${p}` : `${p}/${q}`
 }
 
 /**
- * How the net equation differs from the step's, by ChEBI entity (a membrane's sides are not compared): [] when they
- * agree. Undefined when a species of the step has no ChEBI ID to compare by.
+ * The least-squares solution x of a x = b of smallest norm (as numpy's lstsq gives), by a one-sided Jacobi SVD:
+ * a is rows of the participants, columns of the parts.
  */
-export function netDifferences(net: RheaParticipant[], step: StepEquation, chebiOf: (node: string) => string|undefined,
-                               related: Related = identical): string[]|undefined {
-    const representative = representatives(related)
-    const stoichiometry = (terms: { chebi?: string, count: number, made: boolean, name: string }[]) => {
-        const m = new Map<string, { count: number, name: string }>()
-        for (const t of terms) {
-            const key = t.chebi ? representative(t.chebi) : `?${t.name}`
-            const entry = m.get(key) ?? { count: 0, name: t.name }
-            entry.count += t.made ? t.count : -t.count
-            m.set(key, entry)
+export function leastSquares(a: number[][], b: number[]): number[] {
+    const m = a.length, n = a[0]?.length ?? 0
+    const u = a.map(row => [...row])
+    const v = Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => i === j ? 1 : 0))
+    for (let sweep = 0; sweep < 60; sweep += 1) {
+        let rotated = false
+        for (let i = 0; i < n - 1; i += 1) {
+            for (let j = i + 1; j < n; j += 1) {
+                let alpha = 0, beta = 0, gamma = 0
+                for (let r = 0; r < m; r += 1) {
+                    alpha += u[r]![i]! ** 2
+                    beta += u[r]![j]! ** 2
+                    gamma += u[r]![i]! * u[r]![j]!
+                }
+                if (Math.abs(gamma) <= 1e-15 * Math.sqrt(alpha * beta)) continue
+                rotated = true
+                const zeta = (beta - alpha) / (2 * gamma)
+                const t = Math.sign(zeta || 1) / (Math.abs(zeta) + Math.sqrt(1 + zeta * zeta))
+                const c = 1 / Math.sqrt(1 + t * t), s = c * t
+                for (const w of [u, v]) {
+                    for (const row of w) {
+                        const x = row[i]!, y = row[j]!
+                        row[i] = c * x - s * y
+                        row[j] = s * x + c * y
+                    }
+                }
+            }
         }
-        return m
+        if (!rotated) break
     }
-    const stepTerms = [...step.substrates.map(p => ({ p, made: false })), ...step.products.map(p => ({ p, made: true }))]
-    const chebis = stepTerms.map(t => t.p.node ? chebiOf(t.p.node) : undefined)
-    if (chebis.some(c => !c)) return undefined
-    const ours = stoichiometry(stepTerms.map((t, k) => ({ chebi: chebis[k], count: t.p.count, made: t.made, name: t.p.species })))
-    const rhea = stoichiometry(net.map(p => ({ chebi: p.chebi, count: p.count, made: p.side === 'R', name: p.name })))
-    const differences: string[] = []
-    for (const key of new Set([...rhea.keys(), ...ours.keys()])) {
-        const a = rhea.get(key), b = ours.get(key)
-        if ((a?.count ?? 0) !== (b?.count ?? 0)) {
-            differences.push(`${a?.name ?? b!.name}: Rhea ${amountText(a?.count ?? 0)}, the step ${amountText(b?.count ?? 0)}`)
+    const sigma = Array.from({ length: n }, (_, j) => Math.sqrt(u.reduce((sum, row) => sum + row[j]! ** 2, 0)))
+    const cutoff = Number.EPSILON * Math.max(m, n) * Math.max(0, ...sigma)
+    const x = new Array<number>(n).fill(0)
+    for (let j = 0; j < n; j += 1) {
+        if (sigma[j]! <= cutoff) continue
+        const projection = u.reduce((sum, row, r) => sum + row[j]! * b[r]!, 0) / (sigma[j]! ** 2)
+        for (let i = 0; i < n; i += 1) x[i]! += v[i]![j]! * projection
+    }
+    return x
+}
+
+// a participant's key: its ChEBI entity and compartment
+type Key = string
+const keyOf = (chebi: string, location?: string): Key => `${chebi}|${location ?? ''}`
+const chebiOfKey = (key: Key) => key.split('|')[0]!
+const locationOfKey = (key: Key) => key.split('|')[1] || undefined
+
+/** A Rhea reaction's net coefficients by ChEBI ID and in|out, used negative: a polymer counts the units it gains. */
+export function rheaVector(reaction: RheaReaction): Map<Key, number> {
+    const nets = new Map<Key, [number, number]>()
+    for (const p of reaction.participants) {
+        if (!p.chebi) continue
+        const index = p.polymer ? /^(\d*)n([+-]\d+)?$/.exec(p.polymer.replace(/ /g, '')) : null
+        const [multiple, constant] = index ? [Number(index[1] || 1), Number(index[2] || 0)] : [0, 1]
+        const sign = p.side === 'L' ? -1 : 1
+        const key = keyOf(p.chebi, p.location)
+        const [a, b] = nets.get(key) ?? [0, 0]
+        nets.set(key, [a + sign * multiple * p.count, b + sign * constant * p.count])
+    }
+    return new Map([...nets].filter(([, [a, b]]) => a !== 0 || b !== 0).map(([key, [, b]]) => [key, b]))
+}
+
+/** A participant of the step, its count negative when used. */
+export interface StepTerm {
+    chebi?: string
+    location?: string
+    count: number
+    name: string
+}
+
+/** The step's participants, with their species' ChEBI IDs. */
+export function stepTerms(step: StepEquation, chebiOf: (node: string) => string|undefined): StepTerm[] {
+    return [...step.substrates.map(p => ({ p, sign: -1 })), ...step.products.map(p => ({ p, sign: 1 }))]
+        .map(({ p, sign }) => ({ chebi: p.node ? chebiOf(p.node) : undefined, location: p.location,
+                                 count: sign * p.count, name: p.species }))
+}
+
+export interface Verification {
+    status: 'match' | 'warn' | 'differs'
+    text: string                // as the module library's report words it
+    multipliers: number[]       // each part's, as the fit gives it (one part: 1)
+    notes: string[]             // ChEBI IDs read as the step's by is_a
+}
+
+// the step's coefficients against k times Rhea's for the best k: [cost, verification without multipliers]
+function match(model: Map<Key, number>, ref: Map<Key, number>, names: Map<string, string>)
+: [number, Omit<Verification, 'multipliers' | 'notes'>] {
+    const keys = new Set([...model.keys(), ...ref.keys()])
+    const soft = [...keys].some(k => !SOFT.has(chebiOfKey(k))) ? SOFT : new Set<string>()
+    const hard = (d: Map<Key, number>) => new Map([...d].filter(([k]) => !soft.has(chebiOfKey(k))))
+    const m = hard(model), r = hard(ref)
+    const shared = [...m.keys()].filter(k => r.has(k))
+    if (shared.length === 0) return [1e6, { status: 'differs', text: 'no participant in common with Rhea\'s reaction' }]
+    const ratios = shared.map(key => m.get(key)! / r.get(key)!)
+    const count = (q: number) => ratios.filter(x => Math.abs(x - q) < TOLERANCE).length
+    let k = ratios[0]!
+    for (const q of ratios) {
+        const better = [count(q) - count(k), +(Math.abs(Math.abs(q) - 1) < TOLERANCE) - +(Math.abs(Math.abs(k) - 1) < TOLERANCE),
+                        +(q > 0) - +(k > 0)].find(d => d !== 0) ?? 0
+        if (better > 0) k = q
+    }
+    const label = (key: Key) => `${names.get(chebiOfKey(key)) ?? chebiOfKey(key)} (CHEBI:${chebiOfKey(key)}`
+                              + `${locationOfKey(key) ? `, ${locationOfKey(key)}` : ''})`
+    const problems: string[] = []
+    for (const key of [...new Set([...m.keys(), ...r.keys()])].sort()) {
+        const want = k * (r.get(key) ?? 0), have = m.get(key) ?? 0
+        if (Math.abs(want - have) < TOLERANCE) continue
+        if (!m.has(key)) problems.push(`missing ${label(key)}: Rhea has ${amountText(want)}`)
+        else if (!r.has(key)) problems.push(`extra ${label(key)}`)
+        else problems.push(`${label(key)}: ${amountText(have)} where Rhea has ${amountText(want)}`)
+    }
+    const warnings: string[] = []
+    for (const key of [...keys].sort()) {
+        const want = k * (ref.get(key) ?? 0), have = model.get(key) ?? 0
+        if (soft.has(chebiOfKey(key)) && Math.abs(want - have) >= TOLERANCE) {
+            const where = locationOfKey(key)
+            warnings.push(`${chebiOfKey(key) === H_PLUS ? 'H+' : 'H2O'}${where ? ` (${where})` : ''}: `
+                        + `${amountText(have)} where Rhea has ${amountText(want)}`)
         }
     }
-    return differences
+    const how = (k < 0 ? 'reversed' : 'as written') + (Math.abs(Math.abs(k) - 1) >= TOLERANCE ? `, scaled by ${amountText(k)}` : '')
+    if (problems.length) return [problems.length, { status: 'differs', text: problems.join('; ') }]
+    if (warnings.length) return [0.5, { status: 'warn', text: `matches (${how}) but for ${warnings.join('; ')}` }]
+    return [0, { status: 'match', text: `matches (${how})` }]
+}
+
+// the multipliers of the parts that come nearest the step, and the net reaction they give
+function lumped(model: Map<Key, number>, parts: Map<Key, number>[]): [number[], Map<Key, number>] {
+    const keys = [...new Set([...parts.flatMap(p => [...p.keys()]), ...model.keys()])].sort()
+    const hard = keys.filter(k => !SOFT.has(chebiOfKey(k)))
+    const multipliers = leastSquares(hard.map(k => parts.map(p => p.get(k) ?? 0)), hard.map(k => model.get(k) ?? 0))
+                            .map(roundFraction)
+    const net = new Map<Key, number>()
+    multipliers.forEach((x, i) => {
+        for (const [k, c] of parts[i]!) net.set(k, (net.get(k) ?? 0) + x * c)
+    })
+    return [multipliers, new Map([...net].filter(([, c]) => Math.abs(c) >= TOLERANCE))]
+}
+
+function* permutations<T>(items: T[], size: number): Generator<T[]> {
+    if (size === 0) { yield []; return }
+    for (let i = 0; i < items.length; i += 1) {
+        for (const rest of permutations([...items.slice(0, i), ...items.slice(i + 1)], size - 1)) yield [items[i]!, ...rest]
+    }
+}
+
+/**
+ * The step against its Rhea reaction (one) or the reactions it lumps (several). Undefined when a species of the step
+ * has no ChEBI ID to compare by.
+ */
+export function verifyReaction(reactions: RheaReaction[], terms: StepTerm[], related: Related = identical)
+: Verification|undefined {
+    if (terms.some(t => !t.chebi)) return undefined
+    const names = new Map<string, string>()
+    for (const p of reactions.flatMap(r => r.participants)) if (p.chebi && !names.has(p.chebi)) names.set(p.chebi, p.name)
+    for (const t of terms) if (!names.has(t.chebi!)) names.set(t.chebi!, t.name)
+    const model = new Map<Key, number>()
+    for (const t of terms) model.set(keyOf(t.chebi!, t.location), (model.get(keyOf(t.chebi!, t.location)) ?? 0) + t.count)
+    for (const [k, c] of model) if (c === 0) model.delete(k)
+    // a Rhea term the step writes more or less specifically (ChEBI is_a either way) stands for the step's
+    const modelChebis = [...new Set([...model.keys()].map(chebiOfKey))]
+    const notes: string[] = [], renamed = new Map<string, string>()
+    const rheaChebis = [...new Set(reactions.flatMap(r => r.participants.map(p => p.chebi)).filter((c): c is string => !!c))]
+    for (const chebi of rheaChebis.filter(c => !modelChebis.includes(c)).sort()) {
+        const matches = modelChebis.filter(c => related(c, chebi))
+        if (matches.length === 1) {
+            renamed.set(chebi, matches[0]!)
+            notes.push(`${names.get(matches[0]!)} (CHEBI:${matches[0]}) for Rhea's ${names.get(chebi)} (CHEBI:${chebi}), by ChEBI is_a`)
+        }
+    }
+    const vectors = reactions.map(r => {
+        const v = new Map<Key, number>()
+        for (const [key, c] of rheaVector(r)) {
+            const k = keyOf(renamed.get(chebiOfKey(key)) ?? chebiOfKey(key), locationOfKey(key))
+            v.set(k, (v.get(k) ?? 0) + c)
+        }
+        return v
+    })
+    const modelLocations = [...new Set([...model.keys()].map(k => locationOfKey(k) ?? ''))].sort()
+    const rheaLocations = [...new Set(vectors.flatMap(v => [...v.keys()].map(locationOfKey)).filter((l): l is string => !!l))].sort()
+    const assignments: (Record<string, string>|null)[] = rheaLocations.length === 0 ? [null]
+        : [...permutations(modelLocations, rheaLocations.length)].map(chosen => Object.fromEntries(rheaLocations.map((l, i) => [l, chosen[i]!])))
+    let best: [number, Verification]|undefined
+    for (const assignment of assignments) {
+        if (assignment === null && modelLocations.length > 1) continue    // Rhea's isn't a transport, this spans compartments
+        const placed = vectors.map(v => {
+            const ref = new Map<Key, number>()
+            for (const [key, c] of v) {
+                const chebi = chebiOfKey(key), l = locationOfKey(key)
+                let where: string|undefined
+                if (l !== undefined) where = assignment?.[l]
+                else {
+                    // an unlocated participant: wherever the step has that species
+                    const own = [...new Set([...model.keys()].filter(k => chebiOfKey(k) === chebi).map(k => locationOfKey(k) ?? ''))]
+                    where = own.length === 1 ? own[0] : (assignment?.in ?? modelLocations[0])
+                }
+                const k = keyOf(chebi, where || undefined)
+                ref.set(k, (ref.get(k) ?? 0) + c)
+            }
+            return ref
+        })
+        const [multipliers, ref] = placed.length === 1 ? [[1], placed[0]!] : lumped(model, placed)
+        const [cost, result] = match(model, ref, names)
+        if (!best || cost < best[0]) best = [cost, { ...result, multipliers, notes }]
+    }
+    if (!best) {
+        return { status: 'differs', multipliers: reactions.map(() => 1), notes,
+                 text: `Rhea's reaction is ${rheaLocations.length ? 'a transport' : 'not a transport'}, but this one `
+                     + (modelLocations.length > 1 ? `spans ${modelLocations.join(' and ')}` : 'is in one location') }
+    }
+    return best[1]
 }
 
 //==============================================================================

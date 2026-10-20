@@ -318,23 +318,33 @@ const scenario = (src: string) => `(async () => {
     type(annotatedRow(), 'input.rhea', '17825')
     type(speciesRow(), 'input.go', '0005829')
     await applyAnnotations()
-    // a lumped step: its Rhea parts (fetched live) typeset one under another, what cancels struck through, then the net
-    const lumpedRow = reactionRows()[1]
+    // a lumped step: its Rhea parts (fetched live) in the direction and number the step uses them, what cancels struck
+    // through, under Rhea's net equation and the verdict; a step lumped in the document must agree with Rhea, as
+    // the module library's bondgraph_reactions_test finds it (H+ and H2O aside), else HK + PGI is typed on one
+    const lumpedAlready = reactionRows().find(r => r.querySelector('input.lumped')?.checked)
+    const lumpedRow = lumpedAlready ?? reactionRows()[1]
     if (lumpedRow) {
-        const lumpedBox = lumpedRow.querySelector('input.lumped')
-        lumpedBox.checked = true
-        lumpedBox.dispatchEvent(new Event('change'))
-        await wait(100)
-        type(lumpedRow, 'input.parts', '17825, 11816')
+        if (!lumpedAlready) {
+            const lumpedBox = lumpedRow.querySelector('input.lumped')
+            lumpedBox.checked = true
+            lumpedBox.dispatchEvent(new Event('change'))
+            await wait(100)
+            type(lumpedRow, 'input.parts', '17825, 11816')
+        }
         const shownParts = () => lumpedRow.querySelectorAll('.combination .part')
-        for (let i = 0; i < 150 && !lumpedRow.querySelector('.combination .verdict'); i += 1) await wait(100)
+        const verdict = () => lumpedRow.querySelector('.combination .verdict')
+        for (let i = 0; i < 300 && !verdict(); i += 1) await wait(100)
         const struck = [...shownParts()].filter(p => p.querySelector('[data-mml-node="menclose"]')).length
-        check('a lumped step\\'s parts are typeset with what cancels struck through, then the net equation',
-              shownParts().length === 3 && struck === 2 && !!lumpedRow.querySelector('.combination .verdict')
-              && lumpedRow.querySelector('.equation').nextElementSibling?.classList.contains('combination')
-              && shownParts()[0].classList.contains('net'),
-              shownParts().length + ' rows, ' + struck + ' struck; '
-              + (lumpedRow.querySelector('.combination')?.textContent ?? 'no combination'))
+        const parts = lumpedRow.querySelector('input.parts').value.split(/[\\s,;+]+/).filter(Boolean).length
+        const laidOut = shownParts().length === parts + 1 && !!verdict()
+            && lumpedRow.querySelector('.equation').nextElementSibling?.classList.contains('combination')
+            && shownParts()[0].classList.contains('net')
+        check(lumpedAlready ? 'a lumped step agrees with Rhea, its parts as it uses them with what cancels struck through'
+                            : 'a lumped step\\'s parts are typeset under Rhea\\'s net equation and the verdict',
+              laidOut && (lumpedAlready ? struck > 0 && /\\b(match|warn)\\b/.test(verdict().className)
+                                        : struck === 0 || !/not needed/.test(lumpedRow.querySelector('.combination').textContent)),
+              shownParts().length + ' rows, ' + struck + ' struck; ' + (verdict()?.className ?? '') + ': '
+              + (lumpedRow.querySelector('.combination')?.textContent ?? 'no combination').slice(0, 300))
         lumpedRow.scrollIntoView()      // typed, not applied: shown in the screenshot, not saved
     }
     // the panel is widened by dragging its left edge, and every panel takes the width
